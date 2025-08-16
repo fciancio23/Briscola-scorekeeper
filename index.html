@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Briscola 5/6 – Scorekeeper</title>
+
+    <!-- TailwindCSS (Play CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React + ReactDOM (UMD) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+
+    <!-- Babel Standalone con preset TypeScript + React (compila in-browser) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body class="bg-neutral-50">
+    <div id="root"></div>
+
+    <!-- App React in un solo file. NON serve build. -->
+    <script type="text/babel" data-presets="typescript,react">
+      // 🃏 Briscola 5/6 – Scorekeeper (single-file React component)
+      // Mobile-first, salvataggio in localStorage, export/import JSON
+
+      const { useMemo, useState, useEffect } = React;
+
+      function App() {
+        const [step, setStep] = useState("setup");
+        const [playerCount, setPlayerCount] = useState(5);
+        const [players, setPlayers] = useState(["", "", "", "", ""]);
+        const [scores, setScores] = useState({});
+        const [rounds, setRounds] = useState([]);
+
+        const STORAGE_KEY = "briscola_56_scorekeeper_v1";
+        useEffect(() => {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved);
+              if (parsed && (parsed.playerCount === 5 || parsed.playerCount === 6) && Array.isArray(parsed.players)) {
+                setPlayerCount(parsed.playerCount);
+                setPlayers(parsed.players);
+                setScores(parsed.scores || {});
+                setRounds(parsed.rounds || []);
+                setStep(parsed.step || "setup");
+              }
+            } catch {}
+          }
+        }, []);
+
+        useEffect(() => {
+          const payload = { step, playerCount, players, scores, rounds };
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+        }, [step, playerCount, players, scores, rounds]);
+
+        const canStart = useMemo(() => {
+          const trimmed = players.map((p) => p.trim());
+          const nonEmpty = trimmed.length === playerCount && trimmed.every((p) => p.length > 0);
+          const unique = new Set(trimmed).size === trimmed.length;
+          return nonEmpty && unique;
+        }, [players, playerCount]);
+
+        function startGame() {
+          if (!canStart) return;
+          const initialScores = {};
+          players.slice(0, playerCount).forEach((p) => (initialScores[p.trim()] = 0));
+          setScores(initialScores);
+          setStep("game");
+        }
+
+        const [caller, setCaller] = useState("");
+        const [partner, setPartner] = useState("");
+        const [range, setRange] = useState("81-90");
+        const [outcome, setOutcome] = useState("vincono");
+        const [optDouble, setOptDouble] = useState(false);
+        const [optNoPoint, setOptNoPoint] = useState(false);
+
+        const TABLE_5 = {
+          "81-90": { caller: 200, partner: 100, other: -100 },
+          "91-100": { caller: 300, partner: 150, other: -150 },
+          "101-117": { caller: 400, partner: 200, other: -200 },
+          "118": { caller: 500, partner: 250, other: -250 },
+        };
+        const TABLE_6 = {
+          "81-90": { caller: 150, partner: 50, other: -50 },
+          "91-100": { caller: 300, partner: 100, other: -100 },
+          "101-117": { caller: 450, partner: 150, other: -150 },
+          "118": { caller: 600, partner: 200, other: -200 },
+        };
+
+        function multiplier(doubleOn, noPointOn) {
+          return (doubleOn ? 2 : 1) * (noPointOn ? 2 : 1);
+        }
+
+        function computeDeltas() {
+          const activePlayers = players.slice(0, playerCount).map((p) => p.trim());
+          if (!caller || !partner || caller === partner) return null;
+          if (!activePlayers.includes(caller) || !activePlayers.includes(partner)) return null;
+
+          const table = playerCount === 5 ? TABLE_5 : TABLE_6;
+          const base = table[range];
+          const mult = multiplier(optDouble, optNoPoint);
+
+          const deltas = {};
+          for (const p of activePlayers) deltas[p] = 0;
+          const sign = outcome === "vincono" ? 1 : -1;
+
+          deltas[caller] += sign * base.caller * mult;
+          deltas[partner] += sign * base.partner * mult;
+          for (const p of activePlayers) if (p !== caller && p !== partner) deltas[p] += sign * base.other * mult;
+
+          return deltas;
+        }
+
+        function applyRound() {
+          const deltas = computeDeltas();
+          if (!deltas) return;
+          const newScores = { ...scores };
+          Object.entries(deltas).forEach(([p, d]) => {
+            newScores[p] = (newScores[p] || 0) + d;
+          });
+          setScores(newScores);
+          const rec = {
+            id: cryptoRandomId(),
+            playerCount,
+            caller,
+            partner,
+            range,
+            outcome,
+            optDouble,
+            optNoPoint,
+            deltas,
+            timestamp: Date.now(),
+          };
+          setRounds([rec, ...rounds]);
+          setCaller("");
+          setPartner("");
+          setRange("81-90");
+          setOutcome("vincono");
+          setOptDouble(false);
+          setOptNoPoint(false);
+        }
+
+        function undoRound(id) {
+          const rec = rounds.find((r) => r.id === id);
+          if (!rec) return;
+          const reverted = { ...scores };
+          Object.entries(rec.deltas).forEach(([p, d]) => {
+            reverted[p] = (reverted[p] || 0) - d;
+          });
+          setScores(reverted);
+          setRounds(rounds.filter((r) => r.id !== id));
+        }
+
+        function resetAll() {
+          if (!confirm("Azzerare tutto? Giocatori, punteggi e storico andranno persi.")) return;
+          setStep("setup");
+          setPlayers(playerCount === 5 ? ["", "", "", "", ""] : ["", "", "", "", "", ""]);
+          setScores({});
+          setRounds([]);
+          setCaller("");
+          setPartner("");
+          setRange("81-90");
+          setOutcome("vincono");
+          setOptDouble(false);
+          setOptNoPoint(false);
+        }
+
+        function exportJSON() {
+          const data = {
+            playerCount,
+            players: players.slice(0, playerCount).map((p) => p.trim()),
+            scores,
+            rounds,
+            version: 1,
+          };
+          const text = JSON.stringify(data, null, 2);
+          navigator.clipboard.writeText(text).then(() => {
+            alert("Dati copiati negli appunti! Incollali dove vuoi o conservali.");
+          });
+        }
+
+        function importJSON() {
+          const text = prompt("Incolla qui il JSON esportato per ripristinare giocatori, punteggi e storico:");
+          if (!text) return;
+          try {
+            const data = JSON.parse(text);
+            if (data && (data.playerCount === 5 || data.playerCount === 6) && Array.isArray(data.players) && typeof data.scores === "object" && Array.isArray(data.rounds)) {
+              setPlayerCount(data.playerCount);
+              setPlayers(data.players);
+              setScores(data.scores);
+              setRounds(data.rounds);
+              setStep("game");
+            } else {
+              alert("Formato non valido.");
+            }
+          } catch {
+            alert("JSON non valido.");
+          }
+        }
+
+        const activePlayers = players.slice(0, playerCount).map((p) => p.trim());
+        const canAddRound = useMemo(() => {
+          if (!caller || !partner || caller === partner) return false;
+          if (!activePlayers.includes(caller) || !activePlayers.includes(partner)) return false;
+          return true;
+        }, [caller, partner, activePlayers]);
+
+        const previewDeltas = computeDeltas();
+
+        return (
+          <div className="min-h-screen bg-neutral-50 text-neutral-900 p-4 sm:p-6">
+            <div className="max-w-3xl mx-auto">
+              <header className="flex items-center justify-between mb-4">
+                <h1 className="text-2xl font-bold">🃏 Briscola 5/6 – Scorekeeper</h1>
+                <div className="flex items-center gap-2">
+                  <button className="px-3 py-1.5 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm" onClick={exportJSON}>Esporta JSON</button>
+                  <button className="px-3 py-1.5 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm" onClick={importJSON}>Importa JSON</button>
+                  <button className="px-3 py-1.5 rounded-xl bg-red-500 hover:bg-red-600 text-white text-sm" onClick={resetAll}>Reset</button>
+                </div>
+              </header>
+
+              {step === "setup" ? (
+                <Setup
+                  playerCount={playerCount}
+                  players={players}
+                  setPlayerCount={(n) => {
+                    setPlayerCount(n);
+                    const base = n === 5 ? 5 : 6;
+                    setPlayers((prev) => {
+                      const next = [...prev];
+                      while (next.length < base) next.push("");
+                      return next.slice(0, base);
+                    });
+                  }}
+                  setPlayers={setPlayers}
+                  canStart={canStart}
+                  onStart={startGame}
+                />
+              ) : (
+                <Game
+                  playerCount={playerCount}
+                  players={activePlayers}
+                  scores={scores}
+                  rounds={rounds}
+                  caller={caller}
+                  setCaller={setCaller}
+                  partner={partner}
+                  setPartner={setPartner}
+                  range={range}
+                  setRange={setRange}
+                  outcome={outcome}
+                  setOutcome={setOutcome}
+                  optDouble={optDouble}
+                  setOptDouble={setOptDouble}
+                  optNoPoint={optNoPoint}
+                  setOptNoPoint={setOptNoPoint}
+                  canAddRound={canAddRound}
+                  previewDeltas={previewDeltas}
+                  onAddRound={applyRound}
+                  onUndoRound={undoRound}
+                />
+              )}
+
+              <footer className="mt-8 text-center text-xs text-neutral-500">
+                Fatto con ❤️ per serate tra amici. Salva questa pagina come app nella Home.
+              </footer>
+            </div>
+          </div>
+        );
+      }
+
+      function Setup({ playerCount, players, setPlayerCount, setPlayers, canStart, onStart }) {
+        return (
+          <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+            <h2 className="text-xl font-semibold mb-2">Impostazioni</h2>
+            <div className="flex gap-3 mb-4">
+              <button className={`px-3 py-1.5 rounded-xl border ${playerCount === 5 ? "bg-neutral-900 text-white" : "bg-white"}`} onClick={() => setPlayerCount(5)}>5 giocatori</button>
+              <button className={`px-3 py-1.5 rounded-xl border ${playerCount === 6 ? "bg-neutral-900 text-white" : "bg-white"}`} onClick={() => setPlayerCount(6)}>6 giocatori</button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {Array.from({ length: playerCount }).map((_, i) => (
+                <div key={i} className="flex flex-col">
+                  <label className="text-sm text-neutral-600">Giocatore {i + 1}</label>
+                  <input
+                    className="mt-1 px-3 py-2 rounded-xl border focus:outline-none focus:ring-2 focus:ring-neutral-300"
+                    value={players[i] || ""}
+                    onChange={(e) => {
+                      const next = [...players];
+                      next[i] = e.target.value;
+                      setPlayers(next);
+                    }}
+                    placeholder={`Nome ${i + 1}`}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 flex justify-between items-center">
+              <span className="text-sm text-neutral-600">Inserisci {playerCount} nomi univoci per iniziare.</span>
+              <button disabled={!canStart} className={`px-4 py-2 rounded-xl text-white ${canStart ? "bg-emerald-600 hover:bg-emerald-700" : "bg-neutral-300"}`} onClick={onStart}>Inizia partita</button>
+            </div>
+          </div>
+        );
+      }
+
+      function Game({ playerCount, players, scores, rounds, caller, setCaller, partner, setPartner, range, setRange, outcome, setOutcome, optDouble, setOptDouble, optNoPoint, setOptNoPoint, canAddRound, previewDeltas, onAddRound, onUndoRound }) {
+        return (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div className="bg-white rounded-2xl shadow p-4 lg:col-span-2">
+              <h2 className="text-lg font-semibold mb-3">Nuova mano</h2>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                <Select label="Chiamante" value={caller} onChange={setCaller} options={players} />
+                <Select label="Compagno" value={partner} onChange={setPartner} options={players.filter((p) => p !== caller)} />
+                <div className="flex flex-col">
+                  <label className="text-sm text-neutral-600">Fascia chiamata</label>
+                  <select className="mt-1 px-3 py-2 rounded-xl border" value={range} onChange={(e) => setRange(e.target.value)}>
+                    <option value="81-90">81-90</option>
+                    <option value="91-100">91-100</option>
+                    <option value="101-117">101-117</option>
+                    <option value="118">118</option>
+                  </select>
+                </div>
+                <div className="flex flex-col">
+                  <label className="text-sm text-neutral-600">Esito</label>
+                  <div className="mt-1 grid grid-cols-2 gap-2">
+                    <button className={`px-3 py-2 rounded-xl border ${outcome === "vincono" ? "bg-emerald-600 text-white" : "bg-white"}`} onClick={() => setOutcome("vincono")}>Vincono</button>
+                    <button className={`px-3 py-2 rounded-xl border ${outcome === "perdono" ? "bg-rose-600 text-white" : "bg-white"}`} onClick={() => setOutcome("perdono")}>Perdono</button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-4 mb-4">
+                <label className="inline-flex items-center gap-2">
+                  <input type="checkbox" checked={optDouble} onChange={(e) => setOptDouble(e.target.checked)} />
+                  <span>Partita doppia</span>
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input type="checkbox" checked={optNoPoint} onChange={(e) => setOptNoPoint(e.target.checked)} />
+                  <span>Senza punto/sottopunto</span>
+                </label>
+                <span className="text-xs text-neutral-500">(attive: x{(optDouble ? 2 : 1) * (optNoPoint ? 2 : 1)})</span>
+              </div>
+
+              {previewDeltas && (
+                <div className="mb-3">
+                  <h3 className="text-sm font-medium text-neutral-700 mb-1">Anteprima punteggi</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {players.map((p) => (
+                      <div key={p} className="px-3 py-2 rounded-xl bg-neutral-100">
+                        <div className="text-xs text-neutral-500">{p}</div>
+                        <div className={`${(previewDeltas[p] || 0) >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>
+                          {(previewDeltas[p] || 0) >= 0 ? "+" : ""}{previewDeltas[p] || 0}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex justify-end">
+                <button disabled={!canAddRound} onClick={onAddRound} className={`px-4 py-2 rounded-xl text-white ${canAddRound ? "bg-neutral-900 hover:bg-neutral-800" : "bg-neutral-300"}`}>Aggiungi mano</button>
+              </div>
+            </div>
+
+            <div className="bg-white rounded-2xl shadow p-4">
+              <div className="flex items-center justify-between mb-2">
+                <h2 className="text-lg font-semibold">Classifica</h2>
+                <span className="text-xs text-neutral-500">{playerCount} giocatori</span>
+              </div>
+              <Leaderboard scores={scores} />
+            </div>
+
+            <div className="bg-white rounded-2xl shadow p-4 lg:col-span-3">
+              <h2 className="text-lg font-semibold mb-3">Storico mani</h2>
+              {rounds.length === 0 ? (
+                <p className="text-sm text-neutral-500">Nessuna mano registrata ancora.</p>
+              ) : (
+                <div className="space-y-3">
+                  {rounds.map((r) => (
+                    <RoundCard key={r.id} r={r} onUndo={() => onUndoRound(r.id)} />
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      }
+
+      function Select({ label, value, onChange, options }) {
+        return (
+          <div className="flex flex-col">
+            <label className="text-sm text-neutral-600">{label}</label>
+            <select className="mt-1 px-3 py-2 rounded-xl border" value={value} onChange={(e) => onChange(e.target.value)}>
+              <option value="" disabled>Seleziona…</option>
+              {options.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+          </div>
+        );
+      }
+
+      function Leaderboard({ scores }) {
+        const ordered = Object.entries(scores).sort((a, b) => b[1] - a[1]);
+        return (
+          <div className="divide-y">
+            {ordered.map(([p, s], idx) => (
+              <div key={p} className="flex items-center justify-between py-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 text-center text-xs text-neutral-500">{idx + 1}</span>
+                  <span className="font-medium">{p}</span>
+                </div>
+                <span className={`font-semibold ${s >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{s >= 0 ? "+" : ""}{s}</span>
+              </div>
+            ))}
+          </div>
+        );
+      }
+
+      function RoundCard({ r, onUndo }) {
+        const mult = (r.optDouble ? 2 : 1) * (r.optNoPoint ? 2 : 1);
+        return (
+          <div className="rounded-2xl border p-3 flex flex-col gap-2">
+            <div className="flex items-center justify-between">
+              <div className="text-sm">
+                <span className="font-medium">{new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+                <span className="mx-2 text-neutral-400">•</span>
+                <span>{r.playerCount}G – Chiamante <b>{r.caller}</b> & Compagno <b>{r.partner}</b></span>
+              </div>
+              <button onClick={onUndo} className="px-3 py-1.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-sm">Annulla</button>
+            </div>
+            <div className="text-sm text-neutral-600">
+              Fascia <b>{r.range}</b> – Esito <b>{r.outcome === "vincono" ? "Vincono" : "Perdono"}</b>
+              {mult > 1 && (<><span className="mx-1">•</span><span>Moltiplicatore x{mult}</span></>)}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              {Object.entries(r.deltas).map(([p, d]) => (
+                <div key={p} className="px-3 py-2 rounded-xl bg-neutral-50 border">
+                  <div className="text-xs text-neutral-500">{p}</div>
+                  <div className={`${d >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>{d >= 0 ? "+" : ""}{d}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      }
+
+      function cryptoRandomId() {
+        if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+          return crypto.randomUUID();
+        }
+        return Math.random().toString(36).slice(2);
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(React.createElement(App));
+    </script>
+  </body>
+</html>
+
