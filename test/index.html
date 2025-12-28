@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Test Firebase – Briscola</title>
+
+  <!-- Firebase SDK (compat, per uso senza build) -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+</head>
+<body style="font-family: sans-serif; padding: 20px">
+
+  <h2>Test Firebase su GitHub Pages</h2>
+  <p>Questa pagina serve solo per verificare che Firebase funzioni correttamente da mobile.</p>
+
+  <div id="status">Connessione in corso…</div>
+
+  <script>
+    // 🔑 Firebase configuration (copiata dalla Firebase Console)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAJEg9lwKsz4P1XY8QgJ6L2AI93J-0PA6Q",
+      authDomain: "briscola-scorekeeper.firebaseapp.com",
+      projectId: "briscola-scorekeeper",
+      storageBucket: "briscola-scorekeeper.firebasestorage.app",
+      messagingSenderId: "413111381658",
+      appId: "1:413111381658:web:244dcc80b50f86a7c67923",
+      measurementId: "G-678QS5S7FV"
+    };
+
+    // 🚀 Inizializza Firebase
+    firebase.initializeApp(firebaseConfig);
+
+    // 🔐 Login anonimo automatico
+    firebase.auth().signInAnonymously()
+      .then(async () => {
+        const db = firebase.firestore();
+        const roomCode = "BRISCOLA-AMICI-TEST"; // puoi cambiarlo
+
+        // ✍️ Scrittura di test
+        await db.collection("rooms").doc(roomCode).set({
+          lastPing: Date.now()
+        }, { merge: true });
+
+        // 📖 Lettura di test
+        const snap = await db.collection("rooms").doc(roomCode).get();
+
+        document.getElementById("status").innerHTML =
+          "✅ Firebase OK!<br><br>Documento letto:<br><pre>" +
+          JSON.stringify(snap.data(), null, 2) +
+          "</pre>";
+      })
+      .catch(err => {
+        console.error(err);
+        document.getElementById("status").innerHTML =
+          "❌ Errore Firebase:<br>" + err.message;
+      });
+  </script>
+
+</body>
+</html>
