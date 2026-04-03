@@ -2,23 +2,21 @@
 <html lang="it">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Test Firebase – Briscola</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Briscola Test Firebase – Room + Albo condiviso</title>
 
-  <!-- Firebase SDK (compat, per uso senza build) -->
+  <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body style="font-family: sans-serif; padding: 20px">
-
-  <h2>Test Firebase su GitHub Pages</h2>
-  <p>Questa pagina serve solo per verificare che Firebase funzioni correttamente da mobile.</p>
-
-  <div id="status">Connessione in corso…</div>
+<body class="bg-neutral-50">
+  <div id="root"></div>
 
   <script>
-    // 🔑 Firebase configuration (copiata dalla Firebase Console)
     const firebaseConfig = {
       apiKey: "AIzaSyAJEg9lwKsz4P1XY8QgJ6L2AI93J-0PA6Q",
       authDomain: "briscola-scorekeeper.firebaseapp.com",
@@ -29,34 +27,284 @@
       measurementId: "G-678QS5S7FV"
     };
 
-    // 🚀 Inizializza Firebase
     firebase.initializeApp(firebaseConfig);
-
-    // 🔐 Login anonimo automatico
-    firebase.auth().signInAnonymously()
-      .then(async () => {
-        const db = firebase.firestore();
-        const roomCode = "BRISCOLA-AMICI-TEST"; // puoi cambiarlo
-
-        // ✍️ Scrittura di test
-        await db.collection("rooms").doc(roomCode).set({
-          lastPing: Date.now()
-        }, { merge: true });
-
-        // 📖 Lettura di test
-        const snap = await db.collection("rooms").doc(roomCode).get();
-
-        document.getElementById("status").innerHTML =
-          "✅ Firebase OK!<br><br>Documento letto:<br><pre>" +
-          JSON.stringify(snap.data(), null, 2) +
-          "</pre>";
-      })
-      .catch(err => {
-        console.error(err);
-        document.getElementById("status").innerHTML =
-          "❌ Errore Firebase:<br>" + err.message;
-      });
+    window.firebaseReady = firebase.auth().signInAnonymously();
+    window.db = firebase.firestore();
   </script>
 
+  <script type="text/babel">
+    const { useEffect, useMemo, useState } = React;
+
+    const ROOM_KEY = "briscola_room_code_v1";
+
+    function normName(s) {
+      return (s || "").trim().toLowerCase();
+    }
+
+    function slugRoom(s) {
+      return (s || "")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "-")
+        .replace(/[^A-Z0-9\-_]/g, "");
+    }
+
+    function App() {
+      const [authReady, setAuthReady] = useState(false);
+      const [view, setView] = useState("room"); // room | home | roster
+      const [roomInput, setRoomInput] = useState(localStorage.getItem(ROOM_KEY) || "BRISCOLA-AMICI-TEST");
+      const [roomCode, setRoomCode] = useState(localStorage.getItem(ROOM_KEY) || "");
+      const [players, setPlayers] = useState([]);
+      const [loadingPlayers, setLoadingPlayers] = useState(false);
+      const [addName, setAddName] = useState("");
+      const [status, setStatus] = useState("");
+
+      useEffect(() => {
+        window.firebaseReady
+          .then(() => setAuthReady(true))
+          .catch((err) => {
+            console.error(err);
+            setStatus("Errore autenticazione Firebase: " + err.message);
+          });
+      }, []);
+
+      useEffect(() => {
+        if (!authReady || !roomCode) return;
+
+        setLoadingPlayers(true);
+        const unsub = window.db
+          .collection("rooms")
+          .doc(roomCode)
+          .collection("players")
+          .orderBy("name")
+          .onSnapshot(
+            (snap) => {
+              const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+              setPlayers(rows);
+              setLoadingPlayers(false);
+            },
+            (err) => {
+              console.error(err);
+              setStatus("Errore lettura albo: " + err.message);
+              setLoadingPlayers(false);
+            }
+          );
+
+        return () => unsub();
+      }, [authReady, roomCode]);
+
+      async function enterRoom() {
+        const code = slugRoom(roomInput);
+        if (!code || code.length < 10) {
+          alert("Inserisci un codice stanza di almeno 10 caratteri.");
+          return;
+        }
+        localStorage.setItem(ROOM_KEY, code);
+        setRoomCode(code);
+        setView("home");
+        setStatus("");
+
+        try {
+          await window.firebaseReady;
+          await window.db.collection("rooms").doc(code).set(
+            {
+              roomCode: code,
+              updatedAt: Date.now(),
+            },
+            { merge: true }
+          );
+        } catch (err) {
+          console.error(err);
+          setStatus("Errore accesso stanza: " + err.message);
+        }
+      }
+
+      async function addPlayer() {
+        const clean = (addName || "").trim();
+        const key = normName(clean);
+        if (!clean) {
+          alert("Inserisci un nome valido.");
+          return;
+        }
+        if (!roomCode) {
+          alert("Prima entra in una stanza.");
+          return;
+        }
+        if (players.some((p) => p.nameKey === key)) {
+          alert("Giocatore già presente nell'albo di questa stanza.");
+          return;
+        }
+
+        try {
+          const id = window.db.collection("rooms").doc(roomCode).collection("players").doc().id;
+          await window.db
+            .collection("rooms")
+            .doc(roomCode)
+            .collection("players")
+            .doc(id)
+            .set({
+              id,
+              name: clean,
+              nameKey: key,
+              createdAt: Date.now(),
+            });
+          setAddName("");
+          setStatus("Giocatore aggiunto correttamente.");
+        } catch (err) {
+          console.error(err);
+          setStatus("Errore aggiunta giocatore: " + err.message);
+        }
+      }
+
+      async function deletePlayer(player) {
+        if (!confirm(`Rimuovere \"${player.name}\" dall'albo di questa stanza?`)) return;
+        try {
+          await window.db.collection("rooms").doc(roomCode).collection("players").doc(player.id).delete();
+          setStatus("Giocatore rimosso.");
+        } catch (err) {
+          console.error(err);
+          setStatus("Errore rimozione giocatore: " + err.message);
+        }
+      }
+
+      const orderedPlayers = useMemo(
+        () => [...players].sort((a, b) => (a.name || "").localeCompare(b.name || "", "it", { sensitivity: "base" })),
+        [players]
+      );
+
+      return (
+        <div className="min-h-screen p-4 sm:p-6 text-neutral-900">
+          <div className="max-w-3xl mx-auto">
+            <header className="mb-4 flex items-center justify-between">
+              <button className="text-2xl font-bold" onClick={() => setView(roomCode ? "home" : "room")}>🃏 Briscola Test Firebase</button>
+              {roomCode && (
+                <button
+                  className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm"
+                  onClick={() => setView("room")}
+                >
+                  Cambia stanza
+                </button>
+              )}
+            </header>
+
+            {!authReady ? (
+              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">Connessione a Firebase in corso…</div>
+            ) : view === "room" ? (
+              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+                <h2 className="text-xl font-semibold mb-2">Codice stanza</h2>
+                <p className="text-sm text-neutral-600 mb-4">
+                  Inserisci il codice condiviso del vostro gruppo. Tutti i telefoni che usano questo codice vedranno lo stesso albo giocatori.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    className="flex-1 px-3 py-2 rounded-xl border"
+                    value={roomInput}
+                    onChange={(e) => setRoomInput(e.target.value)}
+                    placeholder="Es. BRISCOLA-AMICI-7K3P9"
+                  />
+                  <button className="px-4 py-2 rounded-xl bg-neutral-900 text-white" onClick={enterRoom}>
+                    Entra
+                  </button>
+                </div>
+                <p className="mt-3 text-xs text-neutral-500">
+                  Suggerimento: usa almeno 10 caratteri. Il codice viene salvato sul telefono.
+                </p>
+              </div>
+            ) : view === "home" ? (
+              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+                <h2 className="text-xl font-semibold mb-2">Home di test</h2>
+                <div className="rounded-xl bg-neutral-100 px-3 py-2 text-sm mb-4">
+                  <b>Stanza attiva:</b> {roomCode}
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="rounded-2xl border p-4">
+                    <div className="font-semibold mb-2">Albo giocatori condiviso</div>
+                    <p className="text-sm text-neutral-600 mb-3">
+                      Qui testiamo che i giocatori siano uguali su tutti i dispositivi.
+                    </p>
+                    <button className="px-3 py-2 rounded-xl bg-neutral-900 text-white" onClick={() => setView("roster")}>
+                      Apri albo
+                    </button>
+                  </div>
+                  <div className="rounded-2xl border p-4">
+                    <div className="font-semibold mb-2">Stato</div>
+                    <p className="text-sm text-neutral-600">
+                      Se aggiungi o rimuovi un giocatore da un telefono, l'altro dovrebbe aggiornarsi automaticamente.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <div>
+                    <h2 className="text-xl font-semibold">Albo giocatori condiviso</h2>
+                    <div className="text-xs text-neutral-500 mt-1">Stanza: {roomCode}</div>
+                  </div>
+                  <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={() => setView("home")}>
+                    Indietro
+                  </button>
+                </div>
+
+                <div className="rounded-2xl border p-4 mb-4">
+                  <div className="font-semibold mb-2">Crea nuovo giocatore</div>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <input
+                      className="flex-1 px-3 py-2 rounded-xl border"
+                      value={addName}
+                      onChange={(e) => setAddName(e.target.value)}
+                      placeholder="Nome giocatore"
+                    />
+                    <button className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white" onClick={addPlayer}>
+                      Aggiungi
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-neutral-500">
+                    Controllo duplicati case-insensitive attivo su questa stanza.
+                  </p>
+                </div>
+
+                <div className="rounded-2xl border overflow-hidden">
+                  <div className="px-4 py-3 bg-neutral-50 font-semibold">Lista giocatori</div>
+                  {loadingPlayers ? (
+                    <div className="p-4 text-sm text-neutral-500">Caricamento…</div>
+                  ) : orderedPlayers.length === 0 ? (
+                    <div className="p-4 text-sm text-neutral-500">Nessun giocatore registrato in questa stanza.</div>
+                  ) : (
+                    <div className="divide-y">
+                      {orderedPlayers.map((p) => (
+                        <div key={p.id} className="flex items-center justify-between p-4">
+                          <div className="font-medium">{p.name}</div>
+                          <button
+                            className="px-3 py-1.5 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm"
+                            onClick={() => deletePlayer(p)}
+                          >
+                            Rimuovi
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {status && (
+              <div className="mt-4 rounded-2xl border border-neutral-200 bg-white p-4 text-sm text-neutral-700">
+                {status}
+              </div>
+            )}
+
+            <footer className="mt-8 text-center text-xs text-neutral-500">
+              Test 1: codice stanza + albo condiviso su Firebase.
+            </footer>
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(React.createElement(App));
+  </script>
 </body>
 </html>
