@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Briscola Test Firebase – Room + Albo condiviso</title>
+  <title>Briscola Test Firebase – App completa condivisa</title>
 
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
@@ -37,6 +37,20 @@
 
     const ROOM_KEY = "briscola_room_code_v1";
 
+    const TABLE_5 = {
+      "81-90": { caller: 200, partner: 100, other: -100 },
+      "91-100": { caller: 300, partner: 150, other: -150 },
+      "101-117": { caller: 400, partner: 200, other: -200 },
+      "118": { caller: 500, partner: 250, other: -250 },
+    };
+
+    const TABLE_6 = {
+      "81-90": { caller: 150, partner: 50, other: -50 },
+      "91-100": { caller: 300, partner: 100, other: -100 },
+      "101-117": { caller: 450, partner: 150, other: -150 },
+      "118": { caller: 600, partner: 200, other: -200 },
+    };
+
     function normName(s) {
       return (s || "").trim().toLowerCase();
     }
@@ -49,15 +63,75 @@
         .replace(/[^A-Z0-9\-_]/g, "");
     }
 
+    function multiplier(optDouble, optNoPoint) {
+      return (optDouble ? 2 : 1) * (optNoPoint ? 2 : 1);
+    }
+
+    function uuid() {
+      if (typeof crypto !== "undefined" && crypto.randomUUID) return crypto.randomUUID();
+      return Math.random().toString(36).slice(2);
+    }
+
+    function formatSigned(n) {
+      const v = Number(n || 0);
+      return v >= 0 ? `+${v}` : `${v}`;
+    }
+
+    function computeTransfers(scoresByEntryId, entries) {
+      const creditors = [];
+      const debtors = [];
+      for (const e of entries) {
+        const amount = Number(scoresByEntryId[e.entryId] || 0);
+        if (amount > 0) creditors.push({ name: e.displayName, amount });
+        if (amount < 0) debtors.push({ name: e.displayName, amount: -amount });
+      }
+      creditors.sort((a, b) => b.amount - a.amount);
+      debtors.sort((a, b) => b.amount - a.amount);
+      const transfers = [];
+      let i = 0;
+      let j = 0;
+      while (i < debtors.length && j < creditors.length) {
+        const d = debtors[i];
+        const c = creditors[j];
+        const x = Math.min(d.amount, c.amount);
+        if (x > 0) {
+          transfers.push({ from: d.name, to: c.name, points: x });
+          d.amount -= x;
+          c.amount -= x;
+        }
+        if (d.amount === 0) i++;
+        if (c.amount === 0) j++;
+      }
+      return transfers;
+    }
+
+    function buildLinePath(points, width, height, padding) {
+      if (!points || points.length === 0) return "";
+      const xs = points.map((p) => p.x);
+      const ys = points.map((p) => p.y);
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      const dx = maxX - minX || 1;
+      const dy = maxY - minY || 1;
+      const mapX = (x) => padding + ((x - minX) / dx) * (width - padding * 2);
+      const mapY = (y) => padding + (1 - (y - minY) / dy) * (height - padding * 2);
+      return points.map((p, i) => `${i === 0 ? "M" : "L"} ${mapX(p.x).toFixed(1)} ${mapY(p.y).toFixed(1)}`).join(" ");
+    }
+
     function App() {
       const [authReady, setAuthReady] = useState(false);
-      const [view, setView] = useState("room"); // room | home | roster
+      const [view, setView] = useState("room");
       const [roomInput, setRoomInput] = useState(localStorage.getItem(ROOM_KEY) || "BRISCOLA-AMICI-TEST");
       const [roomCode, setRoomCode] = useState(localStorage.getItem(ROOM_KEY) || "");
       const [players, setPlayers] = useState([]);
-      const [loadingPlayers, setLoadingPlayers] = useState(false);
-      const [addName, setAddName] = useState("");
+      const [sessions, setSessions] = useState([]);
+      const [currentGame, setCurrentGame] = useState(null);
+      const [selectedPlayerId, setSelectedPlayerId] = useState(null);
+      const [loading, setLoading] = useState(false);
       const [status, setStatus] = useState("");
+      const [lastTransfers, setLastTransfers] = useState([]);
 
       useEffect(() => {
         window.firebaseReady
@@ -70,27 +144,56 @@
 
       useEffect(() => {
         if (!authReady || !roomCode) return;
+        setLoading(true);
 
-        setLoadingPlayers(true);
-        const unsub = window.db
+        const unsubPlayers = window.db
           .collection("rooms")
           .doc(roomCode)
           .collection("players")
           .orderBy("name")
           .onSnapshot(
-            (snap) => {
-              const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-              setPlayers(rows);
-              setLoadingPlayers(false);
-            },
+            (snap) => setPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
             (err) => {
               console.error(err);
               setStatus("Errore lettura albo: " + err.message);
-              setLoadingPlayers(false);
             }
           );
 
-        return () => unsub();
+        const unsubSessions = window.db
+          .collection("rooms")
+          .doc(roomCode)
+          .collection("sessions")
+          .orderBy("closedAt", "desc")
+          .onSnapshot(
+            (snap) => {
+              setSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+              setLoading(false);
+            },
+            (err) => {
+              console.error(err);
+              setStatus("Errore lettura sessioni: " + err.message);
+              setLoading(false);
+            }
+          );
+
+        const unsubCurrent = window.db
+          .collection("rooms")
+          .doc(roomCode)
+          .collection("meta")
+          .doc("currentGame")
+          .onSnapshot(
+            (snap) => setCurrentGame(snap.exists ? { id: snap.id, ...snap.data() } : null),
+            (err) => {
+              console.error(err);
+              setStatus("Errore lettura partita corrente: " + err.message);
+            }
+          );
+
+        return () => {
+          unsubPlayers();
+          unsubSessions();
+          unsubCurrent();
+        };
       }, [authReady, roomCode]);
 
       async function enterRoom() {
@@ -99,56 +202,33 @@
           alert("Inserisci un codice stanza di almeno 10 caratteri.");
           return;
         }
-        localStorage.setItem(ROOM_KEY, code);
-        setRoomCode(code);
-        setView("home");
-        setStatus("");
-
         try {
           await window.firebaseReady;
-          await window.db.collection("rooms").doc(code).set(
-            {
-              roomCode: code,
-              updatedAt: Date.now(),
-            },
-            { merge: true }
-          );
+          await window.db.collection("rooms").doc(code).set({ roomCode: code, updatedAt: Date.now() }, { merge: true });
+          localStorage.setItem(ROOM_KEY, code);
+          setRoomCode(code);
+          setView("home");
+          setStatus("");
         } catch (err) {
           console.error(err);
           setStatus("Errore accesso stanza: " + err.message);
         }
       }
 
-      async function addPlayer() {
-        const clean = (addName || "").trim();
+      async function addPlayer(name) {
+        const clean = (name || "").trim();
         const key = normName(clean);
         if (!clean) {
           alert("Inserisci un nome valido.");
-          return;
-        }
-        if (!roomCode) {
-          alert("Prima entra in una stanza.");
           return;
         }
         if (players.some((p) => p.nameKey === key)) {
           alert("Giocatore già presente nell'albo di questa stanza.");
           return;
         }
-
         try {
-          const id = window.db.collection("rooms").doc(roomCode).collection("players").doc().id;
-          await window.db
-            .collection("rooms")
-            .doc(roomCode)
-            .collection("players")
-            .doc(id)
-            .set({
-              id,
-              name: clean,
-              nameKey: key,
-              createdAt: Date.now(),
-            });
-          setAddName("");
+          const ref = window.db.collection("rooms").doc(roomCode).collection("players").doc();
+          await ref.set({ id: ref.id, name: clean, nameKey: key, createdAt: Date.now() });
           setStatus("Giocatore aggiunto correttamente.");
         } catch (err) {
           console.error(err);
@@ -167,140 +247,722 @@
         }
       }
 
+      async function startCurrentGame(game) {
+        try {
+          await window.db.collection("rooms").doc(roomCode).collection("meta").doc("currentGame").set({
+            ...game,
+            active: true,
+            updatedAt: Date.now(),
+          });
+          setView("game");
+        } catch (err) {
+          console.error(err);
+          setStatus("Errore creazione partita: " + err.message);
+        }
+      }
+
+      async function updateCurrentGame(patch) {
+        try {
+          await window.db.collection("rooms").doc(roomCode).collection("meta").doc("currentGame").set({
+            ...patch,
+            updatedAt: Date.now(),
+          }, { merge: true });
+        } catch (err) {
+          console.error(err);
+          setStatus("Errore aggiornamento partita: " + err.message);
+        }
+      }
+
+      async function deleteCurrentGame() {
+        try {
+          await window.db.collection("rooms").doc(roomCode).collection("meta").doc("currentGame").delete();
+        } catch (err) {
+          console.error(err);
+          setStatus("Errore rimozione partita corrente: " + err.message);
+        }
+      }
+
+      async function closeCurrentGame(dateISO) {
+        if (!currentGame) return;
+        if (!dateISO) {
+          alert("Inserisci una data valida.");
+          return;
+        }
+        const sessionId = uuid();
+        const sessionData = {
+          id: sessionId,
+          dateISO,
+          playerCount: currentGame.playerCount,
+          entries: currentGame.entries,
+          scoresByEntryId: currentGame.scoresByEntryId,
+          rounds: currentGame.rounds,
+          closedAt: Date.now(),
+        };
+        const transfers = computeTransfers(currentGame.scoresByEntryId, currentGame.entries);
+        try {
+          await window.db.collection("rooms").doc(roomCode).collection("sessions").doc(sessionId).set(sessionData);
+          await deleteCurrentGame();
+          setLastTransfers(transfers);
+          setView("transfers");
+          setStatus("Partita chiusa correttamente.");
+        } catch (err) {
+          console.error(err);
+          setStatus("Errore chiusura partita: " + err.message);
+        }
+      }
+
       const orderedPlayers = useMemo(
         () => [...players].sort((a, b) => (a.name || "").localeCompare(b.name || "", "it", { sensitivity: "base" })),
         [players]
       );
 
+      const registryById = useMemo(() => {
+        const map = new Map();
+        orderedPlayers.forEach((p) => map.set(p.id, p));
+        return map;
+      }, [orderedPlayers]);
+
       return (
         <div className="min-h-screen p-4 sm:p-6 text-neutral-900">
-          <div className="max-w-3xl mx-auto">
-            <header className="mb-4 flex items-center justify-between">
-              <button className="text-2xl font-bold" onClick={() => setView(roomCode ? "home" : "room")}>🃏 Briscola Test Firebase</button>
-              {roomCode && (
-                <button
-                  className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm"
-                  onClick={() => setView("room")}
-                >
-                  Cambia stanza
-                </button>
-              )}
+          <div className="max-w-4xl mx-auto">
+            <header className="mb-4 flex items-center justify-between gap-3">
+              <button className="text-2xl font-bold text-left" onClick={() => setView(roomCode ? "home" : "room")}>🃏 Briscola Firebase Test</button>
+              <div className="flex gap-2">
+                {roomCode && <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm" onClick={() => setView("room")}>Cambia stanza</button>}
+              </div>
             </header>
 
             {!authReady ? (
-              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">Connessione a Firebase in corso…</div>
+              <Panel>Connessione a Firebase in corso…</Panel>
             ) : view === "room" ? (
-              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
-                <h2 className="text-xl font-semibold mb-2">Codice stanza</h2>
-                <p className="text-sm text-neutral-600 mb-4">
-                  Inserisci il codice condiviso del vostro gruppo. Tutti i telefoni che usano questo codice vedranno lo stesso albo giocatori.
-                </p>
-                <div className="flex flex-col sm:flex-row gap-2">
-                  <input
-                    className="flex-1 px-3 py-2 rounded-xl border"
-                    value={roomInput}
-                    onChange={(e) => setRoomInput(e.target.value)}
-                    placeholder="Es. BRISCOLA-AMICI-7K3P9"
-                  />
-                  <button className="px-4 py-2 rounded-xl bg-neutral-900 text-white" onClick={enterRoom}>
-                    Entra
-                  </button>
-                </div>
-                <p className="mt-3 text-xs text-neutral-500">
-                  Suggerimento: usa almeno 10 caratteri. Il codice viene salvato sul telefono.
-                </p>
-              </div>
+              <RoomView roomInput={roomInput} setRoomInput={setRoomInput} onEnter={enterRoom} />
             ) : view === "home" ? (
-              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
-                <h2 className="text-xl font-semibold mb-2">Home di test</h2>
-                <div className="rounded-xl bg-neutral-100 px-3 py-2 text-sm mb-4">
-                  <b>Stanza attiva:</b> {roomCode}
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="rounded-2xl border p-4">
-                    <div className="font-semibold mb-2">Albo giocatori condiviso</div>
-                    <p className="text-sm text-neutral-600 mb-3">
-                      Qui testiamo che i giocatori siano uguali su tutti i dispositivi.
-                    </p>
-                    <button className="px-3 py-2 rounded-xl bg-neutral-900 text-white" onClick={() => setView("roster")}>
-                      Apri albo
-                    </button>
-                  </div>
-                  <div className="rounded-2xl border p-4">
-                    <div className="font-semibold mb-2">Stato</div>
-                    <p className="text-sm text-neutral-600">
-                      Se aggiungi o rimuovi un giocatore da un telefono, l'altro dovrebbe aggiornarsi automaticamente.
-                    </p>
-                  </div>
-                </div>
-              </div>
+              <HomeView
+                roomCode={roomCode}
+                currentGame={currentGame}
+                sessionsCount={sessions.length}
+                playersCount={orderedPlayers.length}
+                onNewGame={(count) => setView(count === 5 ? "new5" : "new6")}
+                onResume={() => setView("game")}
+                onRoster={() => setView("roster")}
+                onStats={() => setView("stats_list")}
+                onDiscardCurrent={async () => {
+                  if (!currentGame) return;
+                  if (!confirm("Eliminare la partita in corso?")) return;
+                  await deleteCurrentGame();
+                }}
+              />
+            ) : view === "roster" ? (
+              <RosterView players={orderedPlayers} onAdd={addPlayer} onDelete={deletePlayer} onBack={() => setView("home")} />
+            ) : view === "new5" || view === "new6" ? (
+              <NewGameSetup
+                playerCount={view === "new5" ? 5 : 6}
+                playersRegistry={orderedPlayers}
+                onBack={() => setView("home")}
+                onStart={startCurrentGame}
+              />
+            ) : view === "game" ? (
+              <GameView
+                currentGame={currentGame}
+                onBack={() => setView("home")}
+                onUpdate={updateCurrentGame}
+                onClose={() => setView("close")}
+              />
+            ) : view === "close" ? (
+              <CloseView currentGame={currentGame} onBack={() => setView("game")} onClose={closeCurrentGame} />
+            ) : view === "stats_list" ? (
+              <StatsListView
+                players={orderedPlayers}
+                onBack={() => setView("home")}
+                onOpen={(playerId) => {
+                  setSelectedPlayerId(playerId);
+                  setView("stats_detail");
+                }}
+              />
+            ) : view === "stats_detail" ? (
+              <StatsDetailView
+                playerId={selectedPlayerId}
+                registryById={registryById}
+                sessions={sessions}
+                onBack={() => setView("stats_list")}
+              />
+            ) : view === "transfers" ? (
+              <TransfersView transfers={lastTransfers} onDone={() => setView("home")} />
             ) : (
-              <div className="bg-white rounded-2xl shadow p-4 sm:p-6">
-                <div className="flex items-center justify-between mb-3">
-                  <div>
-                    <h2 className="text-xl font-semibold">Albo giocatori condiviso</h2>
-                    <div className="text-xs text-neutral-500 mt-1">Stanza: {roomCode}</div>
-                  </div>
-                  <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={() => setView("home")}>
-                    Indietro
-                  </button>
-                </div>
-
-                <div className="rounded-2xl border p-4 mb-4">
-                  <div className="font-semibold mb-2">Crea nuovo giocatore</div>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <input
-                      className="flex-1 px-3 py-2 rounded-xl border"
-                      value={addName}
-                      onChange={(e) => setAddName(e.target.value)}
-                      placeholder="Nome giocatore"
-                    />
-                    <button className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white" onClick={addPlayer}>
-                      Aggiungi
-                    </button>
-                  </div>
-                  <p className="mt-2 text-xs text-neutral-500">
-                    Controllo duplicati case-insensitive attivo su questa stanza.
-                  </p>
-                </div>
-
-                <div className="rounded-2xl border overflow-hidden">
-                  <div className="px-4 py-3 bg-neutral-50 font-semibold">Lista giocatori</div>
-                  {loadingPlayers ? (
-                    <div className="p-4 text-sm text-neutral-500">Caricamento…</div>
-                  ) : orderedPlayers.length === 0 ? (
-                    <div className="p-4 text-sm text-neutral-500">Nessun giocatore registrato in questa stanza.</div>
-                  ) : (
-                    <div className="divide-y">
-                      {orderedPlayers.map((p) => (
-                        <div key={p.id} className="flex items-center justify-between p-4">
-                          <div className="font-medium">{p.name}</div>
-                          <button
-                            className="px-3 py-1.5 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm"
-                            onClick={() => deletePlayer(p)}
-                          >
-                            Rimuovi
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </div>
+              <Panel>Vista non trovata.</Panel>
             )}
 
-            {status && (
-              <div className="mt-4 rounded-2xl border border-neutral-200 bg-white p-4 text-sm text-neutral-700">
-                {status}
-              </div>
-            )}
+            {loading && <div className="mt-4 text-sm text-neutral-500">Sincronizzazione dati…</div>}
+            {status && <div className="mt-4 rounded-2xl border border-neutral-200 bg-white p-4 text-sm text-neutral-700">{status}</div>}
 
             <footer className="mt-8 text-center text-xs text-neutral-500">
-              Test 1: codice stanza + albo condiviso su Firebase.
+              Test completo: stanza condivisa, albo, partita, chiusura, statistiche.
             </footer>
           </div>
         </div>
       );
+    }
+
+    function Panel({ children }) {
+      return <div className="bg-white rounded-2xl shadow p-4 sm:p-6">{children}</div>;
+    }
+
+    function RoomView({ roomInput, setRoomInput, onEnter }) {
+      return (
+        <Panel>
+          <h2 className="text-xl font-semibold mb-2">Codice stanza</h2>
+          <p className="text-sm text-neutral-600 mb-4">Tutti i telefoni che usano lo stesso codice condividono albo, partita e statistiche.</p>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input className="flex-1 px-3 py-2 rounded-xl border" value={roomInput} onChange={(e) => setRoomInput(e.target.value)} placeholder="Es. BRISCOLA-AMICI-7K3P9" />
+            <button className="px-4 py-2 rounded-xl bg-neutral-900 text-white" onClick={onEnter}>Entra</button>
+          </div>
+          <p className="mt-3 text-xs text-neutral-500">Usa almeno 10 caratteri. Il codice resta salvato sul dispositivo.</p>
+        </Panel>
+      );
+    }
+
+    function HomeView({ roomCode, currentGame, sessionsCount, playersCount, onNewGame, onResume, onRoster, onStats, onDiscardCurrent }) {
+      return (
+        <Panel>
+          <h2 className="text-xl font-semibold mb-3">Home</h2>
+          <div className="rounded-xl bg-neutral-100 px-3 py-2 text-sm mb-4"><b>Stanza attiva:</b> {roomCode}</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="rounded-2xl border p-4">
+              <div className="font-semibold mb-2">Nuova Partita</div>
+              {currentGame ? (
+                <div>
+                  <p className="text-sm text-neutral-600 mb-3">C'è già una partita in corso.</p>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="px-3 py-2 rounded-xl bg-neutral-900 text-white" onClick={onResume}>Riprendi</button>
+                    <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onDiscardCurrent}>Elimina</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button className="px-3 py-2 rounded-xl bg-neutral-900 text-white" onClick={() => onNewGame(5)}>5 giocatori</button>
+                  <button className="px-3 py-2 rounded-xl bg-neutral-900 text-white" onClick={() => onNewGame(6)}>6 giocatori</button>
+                </div>
+              )}
+            </div>
+            <div className="rounded-2xl border p-4">
+              <div className="font-semibold mb-2">Statistiche giocatori</div>
+              <button className="px-3 py-2 rounded-xl bg-neutral-900 text-white" onClick={onStats}>Apri</button>
+            </div>
+            <div className="rounded-2xl border p-4 sm:col-span-2">
+              <div className="font-semibold mb-2">Albo giocatori</div>
+              <button className="px-3 py-2 rounded-xl bg-neutral-900 text-white" onClick={onRoster}>Apri</button>
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+            <div className="rounded-xl bg-neutral-100 px-3 py-2">Giocatori registrati: <b>{playersCount}</b></div>
+            <div className="rounded-xl bg-neutral-100 px-3 py-2">Partite chiuse: <b>{sessionsCount}</b></div>
+            <div className="rounded-xl bg-neutral-100 px-3 py-2">Partita attiva: <b>{currentGame ? "Sì" : "No"}</b></div>
+          </div>
+        </Panel>
+      );
+    }
+
+    function RosterView({ players, onAdd, onDelete, onBack }) {
+      const [name, setName] = useState("");
+      return (
+        <Panel>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xl font-semibold">Albo giocatori</h2>
+            <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Indietro</button>
+          </div>
+          <div className="rounded-2xl border p-4 mb-4">
+            <div className="font-semibold mb-2">Crea nuovo giocatore</div>
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input className="flex-1 px-3 py-2 rounded-xl border" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome giocatore" />
+              <button className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => { onAdd(name); setName(""); }}>Aggiungi</button>
+            </div>
+            <p className="mt-2 text-xs text-neutral-500">I nuovi giocatori si creano solo qui. Duplicati case-insensitive bloccati.</p>
+          </div>
+          <div className="rounded-2xl border overflow-hidden">
+            <div className="px-4 py-3 bg-neutral-50 font-semibold">Lista (A–Z)</div>
+            {players.length === 0 ? (
+              <div className="p-4 text-sm text-neutral-500">Nessun giocatore registrato.</div>
+            ) : (
+              <div className="divide-y">
+                {players.map((p) => (
+                  <div key={p.id} className="flex items-center justify-between p-4">
+                    <div className="font-medium">{p.name}</div>
+                    <button className="px-3 py-1.5 rounded-xl bg-neutral-200 hover:bg-neutral-300 text-sm" onClick={() => onDelete(p)}>Rimuovi</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Panel>
+      );
+    }
+
+    function NewGameSetup({ playerCount, playersRegistry, onBack, onStart }) {
+      const [slots, setSlots] = useState(Array.from({ length: playerCount }, () => ({ input: "", mode: "auto" })));
+
+      function updateSlot(idx, patch) {
+        setSlots((prev) => prev.map((s, i) => i === idx ? { ...s, ...patch } : s));
+      }
+
+      function resolvedFor(slot) {
+        const input = (slot.input || "").trim();
+        if (!input) return { status: "empty" };
+        const match = playersRegistry.find((p) => p.nameKey === normName(input)) || null;
+        if (slot.mode === "temp") return { status: "temp", displayName: input, match };
+        if (match) return { status: "reg", displayName: match.name, playerId: match.id, match };
+        return { status: "unresolved" };
+      }
+
+      function submit() {
+        const finalized = slots.map((slot) => resolvedFor(slot));
+        if (finalized.some((f) => f.status === "empty" || f.status === "unresolved")) {
+          alert("Completa tutti i giocatori. Se un nome non è registrato, scegli 'Usa provvisorio'.");
+          return;
+        }
+        const names = finalized.map((f) => normName(f.displayName));
+        if (new Set(names).size !== names.length) {
+          alert("I nomi in partita devono essere univoci (case-insensitive).");
+          return;
+        }
+        const entries = finalized.map((f) => ({
+          entryId: uuid(),
+          kind: f.status === "reg" ? "reg" : "temp",
+          playerId: f.status === "reg" ? f.playerId : null,
+          displayName: f.displayName,
+        }));
+        const scoresByEntryId = {};
+        entries.forEach((e) => scoresByEntryId[e.entryId] = 0);
+        onStart({
+          playerCount,
+          entries,
+          scoresByEntryId,
+          rounds: [],
+          createdAt: Date.now(),
+        });
+      }
+
+      return (
+        <Panel>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xl font-semibold">Nuova partita – {playerCount} giocatori</h2>
+            <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Indietro</button>
+          </div>
+          <p className="text-sm text-neutral-600 mb-4">Se un nome corrisponde a un registrato, viene usato automaticamente come esistente. Puoi sempre forzare il provvisorio.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {slots.map((slot, idx) => {
+              const resolved = resolvedFor(slot);
+              return (
+                <div key={idx} className="rounded-2xl border p-4">
+                  <label className="text-sm text-neutral-600">Giocatore {idx + 1}</label>
+                  <input
+                    className="mt-1 w-full px-3 py-2 rounded-xl border"
+                    value={slot.input}
+                    onChange={(e) => updateSlot(idx, { input: e.target.value })}
+                    placeholder="Nome"
+                  />
+                  <div className="mt-2 text-xs text-neutral-500">
+                    {resolved.status === "reg" ? `Registrato: ${resolved.displayName}` : resolved.status === "temp" ? `Provvisorio: ${resolved.displayName}` : resolved.status === "unresolved" ? "Nome non registrato" : "Non definito"}
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {resolved.match && (
+                      <button className={`px-3 py-1.5 rounded-xl text-sm ${slot.mode !== "temp" ? "bg-neutral-900 text-white" : "bg-neutral-200 hover:bg-neutral-300"}`} onClick={() => updateSlot(idx, { mode: "auto" })}>
+                        Usa esistente ({resolved.match.name})
+                      </button>
+                    )}
+                    {(slot.input || "").trim() && (
+                      <button className={`px-3 py-1.5 rounded-xl text-sm ${slot.mode === "temp" ? "bg-neutral-900 text-white" : "bg-neutral-200 hover:bg-neutral-300"}`} onClick={() => updateSlot(idx, { mode: "temp" })}>
+                        Usa provvisorio
+                      </button>
+                    )}
+                  </div>
+                  {!resolved.match && (slot.input || "").trim() && slot.mode !== "temp" && (
+                    <div className="mt-2 text-xs text-neutral-500">Per creare un nuovo registrato usa la sezione Albo giocatori.</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-4 flex justify-end">
+            <button className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white" onClick={submit}>Inizia partita</button>
+          </div>
+        </Panel>
+      );
+    }
+
+    function GameView({ currentGame, onBack, onUpdate, onClose }) {
+      if (!currentGame) {
+        return (
+          <Panel>
+            <div className="flex items-center justify-between">
+              <div>Nessuna partita in corso.</div>
+              <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Home</button>
+            </div>
+          </Panel>
+        );
+      }
+
+      const players = currentGame.entries;
+      const [caller, setCaller] = useState("");
+      const [partner, setPartner] = useState("");
+      const [range, setRange] = useState("81-90");
+      const [outcome, setOutcome] = useState("vincono");
+      const [optDouble, setOptDouble] = useState(false);
+      const [optNoPoint, setOptNoPoint] = useState(false);
+      const entryIdToName = useMemo(() => {
+        const map = new Map();
+        players.forEach((p) => map.set(p.entryId, p.displayName));
+        return map;
+      }, [currentGame.updatedAt]);
+
+      function computeDeltas() {
+        if (!caller || !partner || caller === partner) return null;
+        const table = currentGame.playerCount === 5 ? TABLE_5 : TABLE_6;
+        const base = table[range];
+        const sign = outcome === "vincono" ? 1 : -1;
+        const mult = multiplier(optDouble, optNoPoint);
+        const deltas = {};
+        players.forEach((p) => deltas[p.entryId] = 0);
+        deltas[caller] += sign * base.caller * mult;
+        deltas[partner] += sign * base.partner * mult;
+        players.forEach((p) => {
+          if (p.entryId !== caller && p.entryId !== partner) deltas[p.entryId] += sign * base.other * mult;
+        });
+        return deltas;
+      }
+
+      const preview = computeDeltas();
+      const leaderboard = [...players].map((p) => ({ ...p, score: currentGame.scoresByEntryId[p.entryId] || 0 })).sort((a, b) => b.score - a.score);
+
+      async function addRound() {
+        const deltas = computeDeltas();
+        if (!deltas) return;
+        const round = { id: uuid(), callerEntryId: caller, partnerEntryId: partner, range, outcome, optDouble, optNoPoint, deltas, timestamp: Date.now() };
+        const scoresByEntryId = { ...currentGame.scoresByEntryId };
+        Object.entries(deltas).forEach(([eid, d]) => { scoresByEntryId[eid] = (scoresByEntryId[eid] || 0) + d; });
+        await onUpdate({ scoresByEntryId, rounds: [round, ...(currentGame.rounds || [])] });
+        setCaller("");
+        setPartner("");
+        setRange("81-90");
+        setOutcome("vincono");
+        setOptDouble(false);
+        setOptNoPoint(false);
+      }
+
+      async function undoRound(roundId) {
+        const round = (currentGame.rounds || []).find((r) => r.id === roundId);
+        if (!round) return;
+        const scoresByEntryId = { ...currentGame.scoresByEntryId };
+        Object.entries(round.deltas).forEach(([eid, d]) => { scoresByEntryId[eid] = (scoresByEntryId[eid] || 0) - d; });
+        await onUpdate({ scoresByEntryId, rounds: currentGame.rounds.filter((r) => r.id !== roundId) });
+      }
+
+      return (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          <div className="bg-white rounded-2xl shadow p-4 lg:col-span-2">
+            <div className="flex items-center justify-between mb-3 gap-2">
+              <h2 className="text-lg font-semibold">Partita in corso</h2>
+              <div className="flex gap-2">
+                <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Home</button>
+                <button className="px-3 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white" onClick={onClose}>Chiudi partita</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+              <SelectEntry label="Chiamante" value={caller} onChange={setCaller} options={players.map((p) => ({ value: p.entryId, label: p.displayName }))} />
+              <SelectEntry label="Compagno" value={partner} onChange={setPartner} options={players.filter((p) => p.entryId !== caller).map((p) => ({ value: p.entryId, label: p.displayName }))} />
+              <div className="flex flex-col">
+                <label className="text-sm text-neutral-600">Fascia chiamata</label>
+                <select className="mt-1 px-3 py-2 rounded-xl border" value={range} onChange={(e) => setRange(e.target.value)}>
+                  <option value="81-90">81-90</option>
+                  <option value="91-100">91-100</option>
+                  <option value="101-117">101-117</option>
+                  <option value="118">118</option>
+                </select>
+              </div>
+              <div className="flex flex-col">
+                <label className="text-sm text-neutral-600">Esito</label>
+                <div className="mt-1 grid grid-cols-2 gap-2">
+                  <button className={`px-3 py-2 rounded-xl border ${outcome === "vincono" ? "bg-emerald-600 text-white" : "bg-white"}`} onClick={() => setOutcome("vincono")}>Vincono</button>
+                  <button className={`px-3 py-2 rounded-xl border ${outcome === "perdono" ? "bg-rose-600 text-white" : "bg-white"}`} onClick={() => setOutcome("perdono")}>Perdono</button>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center gap-4 mb-4 flex-wrap">
+              <label className="inline-flex items-center gap-2"><input type="checkbox" checked={optDouble} onChange={(e) => setOptDouble(e.target.checked)} /><span>Partita doppia</span></label>
+              <label className="inline-flex items-center gap-2"><input type="checkbox" checked={optNoPoint} onChange={(e) => setOptNoPoint(e.target.checked)} /><span>Senza punto/sottopunto</span></label>
+              <span className="text-xs text-neutral-500">(attive: x{multiplier(optDouble, optNoPoint)})</span>
+            </div>
+            {preview && (
+              <div className="mb-3">
+                <h3 className="text-sm font-medium text-neutral-700 mb-1">Anteprima punteggi</h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {players.map((p) => {
+                    const d = preview[p.entryId] || 0;
+                    return (
+                      <div key={p.entryId} className="px-3 py-2 rounded-xl bg-neutral-100">
+                        <div className="text-xs text-neutral-500">{p.displayName}</div>
+                        <div className={`${d >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>{formatSigned(d)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <button disabled={!preview} onClick={addRound} className={`px-4 py-2 rounded-xl text-white ${preview ? "bg-neutral-900 hover:bg-neutral-800" : "bg-neutral-300"}`}>Aggiungi mano</button>
+            </div>
+          </div>
+          <div className="bg-white rounded-2xl shadow p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="text-lg font-semibold">Classifica</h2>
+              <span className="text-xs text-neutral-500">{currentGame.playerCount} giocatori</span>
+            </div>
+            <div className="divide-y">
+              {leaderboard.map((r, idx) => (
+                <div key={r.entryId} className="flex items-center justify-between py-2">
+                  <div className="flex items-center gap-2"><span className="w-6 text-center text-xs text-neutral-500">{idx + 1}</span><span className="font-medium">{r.displayName}</span></div>
+                  <span className={`font-semibold ${r.score >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{formatSigned(r.score)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="bg-white rounded-2xl shadow p-4 lg:col-span-3">
+            <h2 className="text-lg font-semibold mb-3">Storico mani</h2>
+            {(currentGame.rounds || []).length === 0 ? (
+              <p className="text-sm text-neutral-500">Nessuna mano registrata ancora.</p>
+            ) : (
+              <div className="space-y-3">
+                {currentGame.rounds.map((r) => (
+                  <div key={r.id} className="rounded-2xl border p-3 flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <div className="text-sm"><span className="font-medium">{new Date(r.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span><span className="mx-2 text-neutral-400">•</span><span>Chiamante <b>{entryIdToName.get(r.callerEntryId)}</b> & Compagno <b>{entryIdToName.get(r.partnerEntryId)}</b></span></div>
+                      <button onClick={() => undoRound(r.id)} className="px-3 py-1.5 rounded-xl bg-neutral-100 hover:bg-neutral-200 text-sm">Annulla</button>
+                    </div>
+                    <div className="text-sm text-neutral-600">Fascia <b>{r.range}</b> – Esito <b>{r.outcome === "vincono" ? "Vincono" : "Perdono"}</b>{multiplier(r.optDouble, r.optNoPoint) > 1 && <><span className="mx-1">•</span><span>Moltiplicatore x{multiplier(r.optDouble, r.optNoPoint)}</span></>}</div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {Object.entries(r.deltas).map(([eid, d]) => (
+                        <div key={eid} className="px-3 py-2 rounded-xl bg-neutral-50 border">
+                          <div className="text-xs text-neutral-500">{entryIdToName.get(eid)}</div>
+                          <div className={`${d >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>{formatSigned(d)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    function SelectEntry({ label, value, onChange, options }) {
+      return (
+        <div className="flex flex-col">
+          <label className="text-sm text-neutral-600">{label}</label>
+          <select className="mt-1 px-3 py-2 rounded-xl border" value={value} onChange={(e) => onChange(e.target.value)}>
+            <option value="" disabled>Seleziona…</option>
+            {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </div>
+      );
+    }
+
+    function CloseView({ currentGame, onBack, onClose }) {
+      const [dateISO, setDateISO] = useState("");
+      if (!currentGame) {
+        return (
+          <Panel>
+            <div className="flex items-center justify-between">
+              <div>Nessuna partita in corso.</div>
+              <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Home</button>
+            </div>
+          </Panel>
+        );
+      }
+      return (
+        <Panel>
+          <h2 className="text-xl font-semibold mb-2">Chiudere la partita?</h2>
+          <p className="text-sm text-neutral-600 mb-4">Confermi la chiusura? Dopo la chiusura verrà richiesta la data e saranno suggeriti i pagamenti in punti.</p>
+          <div className="mb-4">
+            <label className="text-sm text-neutral-600">Data partita</label>
+            <input className="mt-1 px-3 py-2 rounded-xl border" type="date" value={dateISO} onChange={(e) => setDateISO(e.target.value)} />
+          </div>
+          <div className="flex gap-2 justify-end">
+            <button className="px-4 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>No</button>
+            <button className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white" onClick={() => onClose(dateISO)}>Sì</button>
+          </div>
+        </Panel>
+      );
+    }
+
+    function TransfersView({ transfers, onDone }) {
+      return (
+        <Panel>
+          <h2 className="text-xl font-semibold mb-3">Pagamenti suggeriti</h2>
+          {(!transfers || transfers.length === 0) ? (
+            <div className="rounded-2xl border p-4 text-sm text-neutral-600">Nessun pagamento necessario.</div>
+          ) : (
+            <div className="space-y-2">
+              {transfers.map((t, i) => (
+                <div key={i} className="rounded-2xl border p-3 flex items-center justify-between gap-3">
+                  <div className="font-medium">{t.from}</div>
+                  <div className="flex items-center gap-2 text-lg font-semibold"><span>➜</span><span>{t.points}</span><span>➜</span></div>
+                  <div className="font-medium">{t.to}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="mt-4 flex justify-end"><button className="px-4 py-2 rounded-xl bg-neutral-900 text-white" onClick={onDone}>Chiudi</button></div>
+        </Panel>
+      );
+    }
+
+    function StatsListView({ players, onBack, onOpen }) {
+      return (
+        <Panel>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xl font-semibold">Statistiche giocatori</h2>
+            <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Indietro</button>
+          </div>
+          {players.length === 0 ? (
+            <div className="rounded-2xl border p-4 text-sm text-neutral-600">Nessun giocatore registrato.</div>
+          ) : (
+            <div className="rounded-2xl border overflow-hidden">
+              <div className="px-4 py-3 bg-neutral-50 font-semibold">Giocatori</div>
+              <div className="divide-y">
+                {players.map((p) => (
+                  <button key={p.id} className="w-full text-left p-4 hover:bg-neutral-50" onClick={() => onOpen(p.id)}>
+                    <div className="font-medium">{p.name}</div>
+                    <div className="text-xs text-neutral-500">Apri statistiche</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <p className="mt-3 text-xs text-neutral-500">Le statistiche considerano solo partite chiuse.</p>
+        </Panel>
+      );
+    }
+
+    function StatsDetailView({ playerId, registryById, sessions, onBack }) {
+      const player = registryById.get(playerId);
+      const [fromISO, setFromISO] = useState("");
+      const [toISO, setToISO] = useState("");
+
+      const allSessions = useMemo(() => {
+        return (sessions || []).filter((s) => (s.entries || []).some((e) => e.kind === "reg" && e.playerId === playerId));
+      }, [sessions, playerId]);
+
+      const filteredSessions = useMemo(() => {
+        return allSessions
+          .filter((s) => {
+            if (fromISO && s.dateISO < fromISO) return false;
+            if (toISO && s.dateISO > toISO) return false;
+            return true;
+          })
+          .sort((a, b) => (a.dateISO > b.dateISO ? 1 : -1));
+      }, [allSessions, fromISO, toISO]);
+
+      const stats = useMemo(() => {
+        if (!player) return null;
+        let handsTotal = 0;
+        let totalPoints = 0;
+        const hist = { "81-90": 0, "91-100": 0, "101-117": 0, "118": 0 };
+        for (const s of allSessions) {
+          handsTotal += (s.rounds || []).length;
+          const entry = (s.entries || []).find((e) => e.kind === "reg" && e.playerId === playerId);
+          if (!entry) continue;
+          totalPoints += Number((s.scoresByEntryId || {})[entry.entryId] || 0);
+          for (const r of (s.rounds || [])) {
+            if (r.callerEntryId === entry.entryId) hist[r.range] = (hist[r.range] || 0) + 1;
+          }
+        }
+        let cum = 0;
+        const series = filteredSessions.map((s, idx) => {
+          const entry = (s.entries || []).find((e) => e.kind === "reg" && e.playerId === playerId);
+          const sessionPoints = entry ? Number((s.scoresByEntryId || {})[entry.entryId] || 0) : 0;
+          cum += sessionPoints;
+          return { idx, dateISO: s.dateISO, sessionPoints, cumPoints: cum, x: idx, y: cum };
+        });
+        return { handsTotal, totalPoints, hist, series };
+      }, [player, allSessions, filteredSessions]);
+
+      if (!player || !stats) {
+        return <Panel><div className="flex items-center justify-between"><div>Giocatore non trovato.</div><button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Indietro</button></div></Panel>;
+      }
+
+      const histMax = Math.max(...Object.values(stats.hist), 1);
+      const chartW = 800;
+      const chartH = 220;
+      const path = buildLinePath((stats.series || []).map((p) => ({ x: p.x, y: p.y })), chartW, chartH, 20);
+
+      return (
+        <Panel>
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <h2 className="text-xl font-semibold">{player.name}</h2>
+              <div className="text-xs text-neutral-500">Statistiche in punti</div>
+            </div>
+            <button className="px-3 py-2 rounded-xl bg-neutral-200 hover:bg-neutral-300" onClick={onBack}>Indietro</button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-4">
+            <StatCard title="Mani giocate" value={stats.handsTotal} />
+            <StatCard title="Totale punti" value={formatSigned(stats.totalPoints)} />
+            <StatCard title="Sessioni" value={allSessions.length} />
+          </div>
+          <div className="rounded-2xl border p-4 mb-4">
+            <div className="font-semibold mb-2">Range di chiamata più frequente (chiamante)</div>
+            <div className="space-y-2">
+              {Object.entries(stats.hist).map(([k, v]) => (
+                <div key={k} className="flex items-center gap-3">
+                  <div className="w-20 text-sm text-neutral-600">{k}</div>
+                  <div className="flex-1 h-3 rounded-full bg-neutral-100 overflow-hidden"><div className="h-3 bg-neutral-900" style={{ width: `${(v / histMax) * 100}%` }} /></div>
+                  <div className="w-10 text-right text-sm">{v}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-2xl border p-4">
+            <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 mb-3">
+              <div>
+                <div className="font-semibold">Storico punti (cumulativo)</div>
+                <div className="text-xs text-neutral-500">Default: tutto il periodo. Imposta un range per filtrare.</div>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex flex-col"><label className="text-xs text-neutral-500">Da</label><input className="px-3 py-2 rounded-xl border" type="date" value={fromISO} onChange={(e) => setFromISO(e.target.value)} /></div>
+                <div className="flex flex-col"><label className="text-xs text-neutral-500">A</label><input className="px-3 py-2 rounded-xl border" type="date" value={toISO} onChange={(e) => setToISO(e.target.value)} /></div>
+              </div>
+            </div>
+            {stats.series.length === 0 ? (
+              <div className="text-sm text-neutral-600">Nessuna sessione nel range selezionato.</div>
+            ) : (
+              <div>
+                <div className="w-full overflow-x-auto">
+                  <svg viewBox={`0 0 ${chartW} ${chartH}`} className="w-full h-[220px]">
+                    <path d={path} fill="none" stroke="currentColor" strokeWidth="3" />
+                    <line x1="20" y1={chartH - 20} x2={chartW - 20} y2={chartH - 20} stroke="currentColor" opacity="0.2" />
+                  </svg>
+                </div>
+                <div className="mt-3 rounded-2xl border overflow-hidden">
+                  <div className="px-4 py-2 bg-neutral-50 text-sm font-semibold">Dettaglio sessioni (range)</div>
+                  <div className="divide-y">
+                    {stats.series.map((p, idx) => (
+                      <div key={idx} className="p-4 flex items-center justify-between gap-3">
+                        <div className="text-sm text-neutral-700">{p.dateISO}</div>
+                        <div className="text-sm">Sessione: <span className={`${p.sessionPoints >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>{formatSigned(p.sessionPoints)}</span><span className="mx-2 text-neutral-300">|</span>Cumulato: <span className={`${p.cumPoints >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>{formatSigned(p.cumPoints)}</span></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </Panel>
+      );
+    }
+
+    function StatCard({ title, value }) {
+      return <div className="rounded-2xl border p-4"><div className="text-xs text-neutral-500">{title}</div><div className="text-2xl font-bold mt-1">{value}</div></div>;
     }
 
     const root = ReactDOM.createRoot(document.getElementById("root"));
