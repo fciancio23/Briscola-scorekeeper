@@ -331,22 +331,24 @@
       return (
         <div className="min-h-screen p-4 sm:p-6 text-neutral-900" style={{ background: 'radial-gradient(circle at top, #2f6b3d 0%, #215331 42%, #173b21 100%)' }}>
           <div className="max-w-4xl mx-auto">
-            <header className="mb-5 flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3 min-w-0">
-                <img
-                  src="./logo-briscola-beta.png"
-                  alt="Logo con assi siciliani"
-                  className="w-16 sm:w-20 h-auto rounded-2xl border border-[#d8c9a7] bg-[#f5ecda] p-1 shadow-md shrink-0"
-                />
-                <button className="text-left min-w-0" onClick={() => setView(roomCode ? "home" : "room")}>
-                  <div className="text-xl sm:text-2xl font-extrabold tracking-tight text-[#f7ecd7] truncate">Il Giuoco Della Briscola</div>
-                  <div className="text-xs sm:text-sm text-[#d9d0bf]">Segnapunti condiviso per la briscola</div>
-                </button>
-              </div>
-              <div className="flex gap-2">
-                {roomCode && <button className="px-3 py-2 rounded-xl bg-[#efe4cf] hover:bg-[#e4d7bc] text-sm text-[#214a2d]" onClick={() => setView("room")}>Cambia stanza</button>}
-              </div>
-            </header>
+            {view !== "room" && view !== "home" && (
+              <header className="mb-5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <img
+                    src="./logo-briscola-beta.png"
+                    alt="Logo con assi siciliani"
+                    className="w-14 sm:w-16 h-auto rounded-2xl border border-[#d8c9a7] bg-[#f5ecda] p-1 shadow-md shrink-0"
+                  />
+                  <button className="text-left min-w-0" onClick={() => setView(roomCode ? "home" : "room")}>
+                    <div className="text-lg sm:text-xl font-extrabold tracking-tight text-[#f7ecd7] truncate">Il Giuoco Della Briscola</div>
+                    <div className="text-xs sm:text-sm text-[#d9d0bf]">Segnapunti condiviso</div>
+                  </button>
+                </div>
+                <div className="flex gap-2">
+                  {roomCode && <button className="px-3 py-2 rounded-xl bg-[#efe4cf] hover:bg-[#e4d7bc] text-sm text-[#214a2d]" onClick={() => setView("room")}>Cambia stanza</button>}
+                </div>
+              </header>
+            )}
 
             {!authReady ? (
               <Panel>Connessione a Firebase in corso…</Panel>
@@ -426,56 +428,125 @@
 
     function RoomView({ roomInput, setRoomInput, onEnter }) {
       return (
-        <Panel>
-          <h2 className="text-xl font-semibold mb-2">Codice stanza</h2>
-          <p className="text-sm text-neutral-600 mb-4">Tutti i telefoni che usano lo stesso codice condividono albo, partita e statistiche.</p>
-          <div className="flex flex-col sm:flex-row gap-2">
-            <input className="flex-1 px-3 py-2 rounded-xl border" value={roomInput} onChange={(e) => setRoomInput(e.target.value)} placeholder="Es. BRISCOLA-AMICI-7K3P9" />
-            <button className="px-4 py-2 rounded-xl bg-[#1f5a34] hover:bg-[#18472a] text-white" onClick={onEnter}>Entra</button>
+        <div className="space-y-5">
+          <div className="flex flex-col items-center text-center px-4 pt-2">
+            <img
+              src="./logo-briscola-beta.png"
+              alt="Logo con assi siciliani"
+              className="w-40 sm:w-48 h-auto rounded-[28px] border border-[#d8c9a7] bg-[#f5ecda] p-2 shadow-xl"
+            />
+            <h1 className="mt-4 text-3xl sm:text-4xl font-extrabold tracking-tight text-[#f7ecd7] leading-tight">
+              Il Giuoco Della Briscola
+            </h1>
+            <p className="mt-2 max-w-md text-sm sm:text-base text-[#d9d0bf]">
+              Entra nella stanza del tuo gruppo e sincronizza partite, statistiche e giocatori su tutti i dispositivi.
+            </p>
           </div>
-          <p className="mt-3 text-xs text-neutral-500">Usa almeno 10 caratteri. Il codice resta salvato sul dispositivo.</p>
-        </Panel>
+
+          <Panel>
+            <div className="max-w-2xl mx-auto">
+              <div className="text-sm font-semibold text-[#214a2d] uppercase tracking-[0.12em] mb-2">Codice stanza</div>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <input
+                  className="flex-1 px-4 py-3 rounded-2xl border border-[#d8c9a7] bg-white text-lg outline-none focus:ring-2 focus:ring-[#2d6a3d]"
+                  value={roomInput}
+                  onChange={(e) => setRoomInput(e.target.value)}
+                  placeholder="Es. BRISCOLA-AMICI-7K3P9"
+                />
+                <button className="px-5 py-3 rounded-2xl bg-[#1f5a34] hover:bg-[#18472a] text-white font-semibold shadow-sm" onClick={onEnter}>
+                  Entra
+                </button>
+              </div>
+              <p className="mt-3 text-sm text-neutral-600">
+                Il codice viene salvato sul dispositivo. Tutti i telefoni che usano lo stesso codice vedono gli stessi dati.
+              </p>
+            </div>
+          </Panel>
+        </div>
       );
     }
 
     function HomeView({ roomCode, currentGame, sessionsCount, playersCount, onNewGame, onResume, onRoster, onStats, onDiscardCurrent }) {
       return (
-        <Panel>
-          <h2 className="text-xl font-semibold mb-3">Home</h2>
-          <div className="rounded-xl bg-[#e8dcc5] px-3 py-2 text-sm mb-4"><b>Stanza attiva:</b> {roomCode}</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="rounded-2xl border p-4">
-              <div className="font-semibold mb-2">Nuova Partita</div>
-              {currentGame ? (
+        <div className="space-y-5">
+          <div className="flex flex-col items-center text-center px-4 pt-2">
+            <img
+              src="./logo-briscola-beta.png"
+              alt="Logo con assi siciliani"
+              className="w-28 sm:w-32 h-auto rounded-[24px] border border-[#d8c9a7] bg-[#f5ecda] p-2 shadow-lg"
+            />
+            <h1 className="mt-3 text-3xl sm:text-4xl font-extrabold tracking-tight text-[#f7ecd7] leading-tight">
+              Il Giuoco Della Briscola
+            </h1>
+            <div className="mt-3 inline-flex items-center gap-2 rounded-full bg-[#e8dcc5] px-4 py-2 text-sm text-[#214a2d] shadow-sm">
+              <span className="font-semibold">Stanza attiva</span>
+              <span>{roomCode}</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4">
+            <Panel>
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
-                  <p className="text-sm text-neutral-600 mb-3">C'è già una partita in corso.</p>
+                  <div className="text-2xl font-bold text-[#214a2d]">Nuova Partita</div>
+                  <div className="mt-1 text-sm text-neutral-600">Crea una nuova partita oppure riprendi quella già in corso.</div>
+                </div>
+                {currentGame ? (
                   <div className="flex flex-wrap gap-2">
-                    <button className="px-3 py-2 rounded-xl bg-[#1f5a34] text-white" onClick={onResume}>Riprendi</button>
-                    <button className="px-3 py-2 rounded-xl bg-[#e9dcc4] hover:bg-[#ddceb1]" onClick={onDiscardCurrent}>Elimina</button>
+                    <button className="px-4 py-3 rounded-2xl bg-[#1f5a34] text-white font-semibold" onClick={onResume}>Riprendi</button>
+                    <button className="px-4 py-3 rounded-2xl bg-[#e9dcc4] hover:bg-[#ddceb1] font-semibold text-[#214a2d]" onClick={onDiscardCurrent}>Elimina</button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button className="px-4 py-3 rounded-2xl bg-[#1f5a34] text-white font-semibold" onClick={() => onNewGame(5)}>5 giocatori</button>
+                    <button className="px-4 py-3 rounded-2xl bg-[#1f5a34] text-white font-semibold" onClick={() => onNewGame(6)}>6 giocatori</button>
+                  </div>
+                )}
+              </div>
+            </Panel>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Panel>
+                <div className="flex flex-col h-full justify-between gap-4">
+                  <div>
+                    <div className="text-xl font-bold text-[#214a2d]">Statistiche giocatori</div>
+                    <div className="mt-1 text-sm text-neutral-600">Consulta la classifica, il Wr% e lo storico di ogni giocatore.</div>
+                  </div>
+                  <div>
+                    <button className="w-full px-4 py-3 rounded-2xl bg-[#1f5a34] text-white font-semibold" onClick={onStats}>Apri statistiche</button>
                   </div>
                 </div>
-              ) : (
-                <div className="flex gap-2">
-                  <button className="px-3 py-2 rounded-xl bg-[#1f5a34] text-white" onClick={() => onNewGame(5)}>5 giocatori</button>
-                  <button className="px-3 py-2 rounded-xl bg-[#1f5a34] text-white" onClick={() => onNewGame(6)}>6 giocatori</button>
+              </Panel>
+
+              <Panel>
+                <div className="flex flex-col h-full justify-between gap-4">
+                  <div>
+                    <div className="text-xl font-bold text-[#214a2d]">Albo giocatori</div>
+                    <div className="mt-1 text-sm text-neutral-600">Gestisci i giocatori registrati che usate più spesso nelle vostre partite.</div>
+                  </div>
+                  <div>
+                    <button className="w-full px-4 py-3 rounded-2xl bg-[#1f5a34] text-white font-semibold" onClick={onRoster}>Apri albo</button>
+                  </div>
                 </div>
-              )}
+              </Panel>
             </div>
-            <div className="rounded-2xl border p-4">
-              <div className="font-semibold mb-2">Statistiche giocatori</div>
-              <button className="px-3 py-2 rounded-xl bg-[#1f5a34] text-white" onClick={onStats}>Apri</button>
-            </div>
-            <div className="rounded-2xl border p-4 sm:col-span-2">
-              <div className="font-semibold mb-2">Albo giocatori</div>
-              <button className="px-3 py-2 rounded-xl bg-[#1f5a34] text-white" onClick={onRoster}>Apri</button>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
+              <div className="rounded-2xl bg-[#f5ecda] border border-[#d8c9a7] px-4 py-4 shadow-sm">
+                <div className="text-neutral-500">Giocatori registrati</div>
+                <div className="mt-1 text-2xl font-bold text-[#214a2d]">{playersCount}</div>
+              </div>
+              <div className="rounded-2xl bg-[#f5ecda] border border-[#d8c9a7] px-4 py-4 shadow-sm">
+                <div className="text-neutral-500">Partite chiuse</div>
+                <div className="mt-1 text-2xl font-bold text-[#214a2d]">{sessionsCount}</div>
+              </div>
+              <div className="rounded-2xl bg-[#f5ecda] border border-[#d8c9a7] px-4 py-4 shadow-sm">
+                <div className="text-neutral-500">Partita attiva</div>
+                <div className="mt-1 text-2xl font-bold text-[#214a2d]">{currentGame ? "Sì" : "No"}</div>
+              </div>
             </div>
           </div>
-          <div className="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-sm">
-            <div className="rounded-xl bg-[#e8dcc5] px-3 py-2">Giocatori registrati: <b>{playersCount}</b></div>
-            <div className="rounded-xl bg-[#e8dcc5] px-3 py-2">Partite chiuse: <b>{sessionsCount}</b></div>
-            <div className="rounded-xl bg-[#e8dcc5] px-3 py-2">Partita attiva: <b>{currentGame ? "Sì" : "No"}</b></div>
-          </div>
-        </Panel>
+        </div>
       );
     }
 
