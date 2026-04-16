@@ -135,6 +135,7 @@
       const [sessions, setSessions] = useState([]);
       const [currentGame, setCurrentGame] = useState(null);
       const [selectedPlayerId, setSelectedPlayerId] = useState(null);
+      const [selectedSessionId, setSelectedSessionId] = useState(null);
       const [loading, setLoading] = useState(false);
       const [status, setStatus] = useState("");
       const [lastTransfers, setLastTransfers] = useState([]);
@@ -328,6 +329,10 @@
         return map;
       }, [orderedPlayers]);
 
+      const selectedSession = useMemo(() => {
+        return (sessions || []).find((s) => s.id === selectedSessionId) || null;
+      }, [sessions, selectedSessionId]);
+
       return (
         <div className="min-h-screen p-4 sm:p-6 text-neutral-900" style={{ background: 'radial-gradient(circle at top, #2f6b3d 0%, #215331 42%, #173b21 100%)' }}>
           <div className="max-w-4xl mx-auto">
@@ -364,6 +369,7 @@
                 onResume={() => setView("game")}
                 onRoster={() => setView("roster")}
                 onStats={() => setView("stats_list")}
+                onArchive={() => setView("archive_list")}
                 onDiscardCurrent={async () => {
                   if (!currentGame) return;
                   if (!confirm("Eliminare la partita in corso?")) return;
@@ -404,6 +410,20 @@
                 registryById={registryById}
                 sessions={sessions}
                 onBack={() => setView("stats_list")}
+              />
+            ) : view === "archive_list" ? (
+              <ArchiveListView
+                sessions={sessions}
+                onBack={() => setView("home")}
+                onOpen={(sessionId) => {
+                  setSelectedSessionId(sessionId);
+                  setView("archive_detail");
+                }}
+              />
+            ) : view === "archive_detail" ? (
+              <ArchiveDetailView
+                session={selectedSession}
+                onBack={() => setView("archive_list")}
               />
             ) : view === "transfers" ? (
               <TransfersView transfers={lastTransfers} onDone={() => setView("home")} />
@@ -466,7 +486,7 @@
       );
     }
 
-    function HomeView({ roomCode, currentGame, sessionsCount, playersCount, onNewGame, onResume, onRoster, onStats, onDiscardCurrent }) {
+    function HomeView({ roomCode, currentGame, sessionsCount, playersCount, onNewGame, onResume, onRoster, onStats, onArchive, onDiscardCurrent }) {
       return (
         <div className="space-y-5">
           <div className="flex flex-col items-center text-center px-4 pt-2">
@@ -505,7 +525,7 @@
               </div>
             </Panel>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <Panel>
                 <div className="flex flex-col h-full justify-between gap-4">
                   <div>
@@ -526,6 +546,18 @@
                   </div>
                   <div>
                     <button className="w-full px-4 py-3 rounded-2xl bg-[#1f5a34] text-white font-semibold" onClick={onRoster}>Apri albo</button>
+                  </div>
+                </div>
+              </Panel>
+
+              <Panel>
+                <div className="flex flex-col h-full justify-between gap-4">
+                  <div>
+                    <div className="text-xl font-bold text-[#214a2d]">Archivio partite</div>
+                    <div className="mt-1 text-sm text-neutral-600">Consulta tutte le partite chiuse con punteggi finali e storico delle mani.</div>
+                  </div>
+                  <div>
+                    <button className="w-full px-4 py-3 rounded-2xl bg-[#1f5a34] text-white font-semibold" onClick={onArchive}>Apri archivio</button>
                   </div>
                 </div>
               </Panel>
@@ -1084,6 +1116,143 @@
       );
     }
 
+    function ArchiveListView({ sessions, onBack, onOpen }) {
+      return (
+        <Panel>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-xl font-semibold">Archivio partite</h2>
+            <button className="px-3 py-2 rounded-xl bg-[#e9dcc4] hover:bg-[#ddceb1]" onClick={onBack}>Indietro</button>
+          </div>
+          {sessions.length === 0 ? (
+            <div className="rounded-2xl border p-4 text-sm text-neutral-600">Nessuna partita chiusa disponibile.</div>
+          ) : (
+            <div className="space-y-3">
+              {sessions.map((s) => (
+                <button
+                  key={s.id}
+                  onClick={() => onOpen(s.id)}
+                  className="w-full text-left rounded-2xl border p-4 bg-[#f5ecda] hover:bg-[#efe4cf] transition"
+                >
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+                    <div>
+                      <div className="font-semibold text-[#214a2d]">{s.dateISO || "Data non disponibile"}</div>
+                      <div className="text-sm text-neutral-600">{s.playerCount} giocatori • {(s.entries || []).map((e) => e.displayName).join(", ")}</div>
+                    </div>
+                    <div className="text-sm text-neutral-500">Apri dettaglio</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </Panel>
+      );
+    }
+
+    function ArchiveDetailView({ session, onBack }) {
+      if (!session) {
+        return (
+          <Panel>
+            <div className="flex items-center justify-between">
+              <div>Partita non trovata.</div>
+              <button className="px-3 py-2 rounded-xl bg-[#e9dcc4] hover:bg-[#ddceb1]" onClick={onBack}>Indietro</button>
+            </div>
+          </Panel>
+        );
+      }
+
+      const entries = session.entries || [];
+      const entryIdToName = new Map(entries.map((e) => [e.entryId, e.displayName]));
+      const leaderboard = [...entries]
+        .map((e) => ({ ...e, score: Number((session.scoresByEntryId || {})[e.entryId] || 0) }))
+        .sort((a, b) => b.score - a.score);
+      const transfers = computeTransfers(session.scoresByEntryId || {}, entries);
+
+      return (
+        <div className="space-y-4">
+          <Panel>
+            <div className="flex items-center justify-between gap-3 mb-3">
+              <div>
+                <h2 className="text-xl font-semibold">Partita del {session.dateISO || "—"}</h2>
+                <div className="text-sm text-neutral-600">{session.playerCount} giocatori</div>
+              </div>
+              <button className="px-3 py-2 rounded-xl bg-[#e9dcc4] hover:bg-[#ddceb1]" onClick={onBack}>Indietro</button>
+            </div>
+            <div className="text-sm text-neutral-600">Partecipanti: {entries.map((e) => e.displayName).join(", ")}</div>
+          </Panel>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <Panel>
+              <h3 className="text-lg font-semibold mb-3">Punteggio finale</h3>
+              <div className="divide-y">
+                {leaderboard.map((r, idx) => (
+                  <div key={r.entryId} className="flex items-center justify-between py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-6 text-center text-xs text-neutral-500">{idx + 1}</span>
+                      <span className="font-medium">{r.displayName}</span>
+                    </div>
+                    <span className={`${r.score >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>{formatSigned(r.score)}</span>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+
+            <Panel>
+              <h3 className="text-lg font-semibold mb-3">Pagamenti suggeriti</h3>
+              {transfers.length === 0 ? (
+                <div className="text-sm text-neutral-600">Nessun pagamento necessario.</div>
+              ) : (
+                <div className="space-y-2">
+                  {transfers.map((t, i) => (
+                    <div key={i} className="rounded-2xl border p-3 flex items-center justify-between gap-3">
+                      <div className="font-medium">{t.from}</div>
+                      <div className="flex items-center gap-2 text-base font-semibold"><span>➜</span><span>{t.points}</span><span>➜</span></div>
+                      <div className="font-medium">{t.to}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+          </div>
+
+          <Panel>
+            <h3 className="text-lg font-semibold mb-3">Storico mani</h3>
+            {(session.rounds || []).length === 0 ? (
+              <div className="text-sm text-neutral-600">Nessuna mano registrata.</div>
+            ) : (
+              <div className="space-y-3">
+                {(session.rounds || []).map((r) => (
+                  <div key={r.id} className="rounded-2xl border p-3 flex flex-col gap-2">
+                    <div className="text-sm">
+                      <span>
+                        Chiamante <b>{entryIdToName.get(r.callerEntryId)}</b> & Compagno <b>{entryIdToName.get(r.partnerEntryId)}</b>
+                      </span>
+                    </div>
+                    <div className="text-sm text-neutral-600">
+                      Fascia <b>{r.range}</b> – Esito <b>{r.outcome === "vincono" ? "Vincono" : "Perdono"}</b>
+                      {multiplier(r.optDouble, r.optNoPoint) > 1 && (
+                        <>
+                          <span className="mx-1">•</span>
+                          <span>Moltiplicatore x{multiplier(r.optDouble, r.optNoPoint)}</span>
+                        </>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                      {Object.entries(r.deltas || {}).map(([eid, d]) => (
+                        <div key={eid} className="px-3 py-2 rounded-xl bg-[#e8dcc5] border">
+                          <div className="text-xs text-neutral-500">{entryIdToName.get(eid)}</div>
+                          <div className={`${d >= 0 ? "text-emerald-700" : "text-rose-700"} font-semibold`}>{formatSigned(d)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Panel>
+        </div>
+      );
+    }
+
     function StatCard({ title, value }) {
       return <div className="rounded-2xl border p-4"><div className="text-xs text-neutral-500">{title}</div><div className="text-2xl font-bold mt-1">{value}</div></div>;
     }
@@ -1093,3 +1262,4 @@
   </script>
 </body>
 </html>
+
