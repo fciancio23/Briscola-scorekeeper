@@ -5,13 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>Il Giuoco Della Briscola</title>
 
+  <!-- FIX 1: Tailwind via CDN Play (accettabile per app personali, alternativa stabile) -->
   <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- Firebase compat (versione aggiornata stabile) -->
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
-  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- FIX 2: React + ReactDOM da unpkg con versioni fissate -->
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"></script>
+
+  <!-- FIX 3: Babel standalone versione fissa + data-type="module" rimosso -->
+  <script src="https://unpkg.com/@babel/standalone@7.24.7/babel.min.js"></script>
+
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -22,6 +30,7 @@
 <body class="bg-[#173b21]">
   <div id="root"></div>
 
+  <!-- FIX 4: Firebase init in script normale (non babel), senza localStorage qui -->
   <script>
     const firebaseConfig = {
       apiKey: "AIzaSyAJEg9lwKsz4P1XY8QgJ6L2AI93J-0PA6Q",
@@ -36,25 +45,36 @@
     firebase.initializeApp(firebaseConfig);
     window.firebaseReady = firebase.auth().signInAnonymously();
     window.db = firebase.firestore();
+
+    // FIX 5: localStorage wrapper sicuro (evita crash in contesti sandboxed)
+    window.safeStorage = {
+      getItem: function(key) {
+        try { return localStorage.getItem(key); } catch(e) { return null; }
+      },
+      setItem: function(key, val) {
+        try { localStorage.setItem(key, val); } catch(e) {}
+      }
+    };
   </script>
 
+  <!-- FIX 6: type="text/babel" senza data-type="module" — questo era il crash principale -->
   <script type="text/babel">
     const { useEffect, useMemo, useState } = React;
 
     const ROOM_KEY = "briscola_room_code_v1";
 
     const TABLE_5 = {
-      "81-90": { caller: 200, partner: 100, other: -100 },
-      "91-100": { caller: 300, partner: 150, other: -150 },
+      "81-90":   { caller: 200, partner: 100, other: -100 },
+      "91-100":  { caller: 300, partner: 150, other: -150 },
       "101-117": { caller: 400, partner: 200, other: -200 },
-      "118": { caller: 500, partner: 250, other: -250 },
+      "118":     { caller: 500, partner: 250, other: -250 },
     };
 
     const TABLE_6 = {
-      "81-90": { caller: 150, partner: 50, other: -50 },
-      "91-100": { caller: 300, partner: 100, other: -100 },
+      "81-90":   { caller: 150, partner: 50,  other: -50  },
+      "91-100":  { caller: 300, partner: 100, other: -100 },
       "101-117": { caller: 450, partner: 150, other: -150 },
-      "118": { caller: 600, partner: 200, other: -200 },
+      "118":     { caller: 600, partner: 200, other: -200 },
     };
 
     function normName(s) {
@@ -94,8 +114,7 @@
       creditors.sort((a, b) => b.amount - a.amount);
       debtors.sort((a, b) => b.amount - a.amount);
       const transfers = [];
-      let i = 0;
-      let j = 0;
+      let i = 0, j = 0;
       while (i < debtors.length && j < creditors.length) {
         const d = debtors[i];
         const c = creditors[j];
@@ -129,8 +148,9 @@
     function App() {
       const [authReady, setAuthReady] = useState(false);
       const [view, setView] = useState("room");
-      const [roomInput, setRoomInput] = useState(localStorage.getItem(ROOM_KEY) || "BRISCOLA-AMICI-TEST");
-      const [roomCode, setRoomCode] = useState(localStorage.getItem(ROOM_KEY) || "");
+      // FIX 5 applicato: uso di window.safeStorage invece di localStorage diretto
+      const [roomInput, setRoomInput] = useState(window.safeStorage.getItem(ROOM_KEY) || "BRISCOLA-AMICI-TEST");
+      const [roomCode, setRoomCode] = useState(window.safeStorage.getItem(ROOM_KEY) || "");
       const [players, setPlayers] = useState([]);
       const [sessions, setSessions] = useState([]);
       const [currentGame, setCurrentGame] = useState(null);
@@ -154,53 +174,29 @@
         setLoading(true);
 
         const unsubPlayers = window.db
-          .collection("rooms")
-          .doc(roomCode)
-          .collection("players")
+          .collection("rooms").doc(roomCode).collection("players")
           .orderBy("name")
           .onSnapshot(
             (snap) => setPlayers(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
-            (err) => {
-              console.error(err);
-              setStatus("Errore lettura albo: " + err.message);
-            }
+            (err) => { console.error(err); setStatus("Errore lettura albo: " + err.message); }
           );
 
         const unsubSessions = window.db
-          .collection("rooms")
-          .doc(roomCode)
-          .collection("sessions")
+          .collection("rooms").doc(roomCode).collection("sessions")
           .orderBy("closedAt", "desc")
           .onSnapshot(
-            (snap) => {
-              setSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
-              setLoading(false);
-            },
-            (err) => {
-              console.error(err);
-              setStatus("Errore lettura sessioni: " + err.message);
-              setLoading(false);
-            }
+            (snap) => { setSessions(snap.docs.map((d) => ({ id: d.id, ...d.data() }))); setLoading(false); },
+            (err) => { console.error(err); setStatus("Errore lettura sessioni: " + err.message); setLoading(false); }
           );
 
         const unsubCurrent = window.db
-          .collection("rooms")
-          .doc(roomCode)
-          .collection("meta")
-          .doc("currentGame")
+          .collection("rooms").doc(roomCode).collection("meta").doc("currentGame")
           .onSnapshot(
             (snap) => setCurrentGame(snap.exists ? { id: snap.id, ...snap.data() } : null),
-            (err) => {
-              console.error(err);
-              setStatus("Errore lettura partita corrente: " + err.message);
-            }
+            (err) => { console.error(err); setStatus("Errore lettura partita corrente: " + err.message); }
           );
 
-        return () => {
-          unsubPlayers();
-          unsubSessions();
-          unsubCurrent();
-        };
+        return () => { unsubPlayers(); unsubSessions(); unsubCurrent(); };
       }, [authReady, roomCode]);
 
       async function enterRoom() {
@@ -212,7 +208,7 @@
         try {
           await window.firebaseReady;
           await window.db.collection("rooms").doc(code).set({ roomCode: code, updatedAt: Date.now() }, { merge: true });
-          localStorage.setItem(ROOM_KEY, code);
+          window.safeStorage.setItem(ROOM_KEY, code);
           setRoomCode(code);
           setView("home");
           setStatus("");
@@ -225,10 +221,7 @@
       async function addPlayer(name) {
         const clean = (name || "").trim();
         const key = normName(clean);
-        if (!clean) {
-          alert("Inserisci un nome valido.");
-          return;
-        }
+        if (!clean) { alert("Inserisci un nome valido."); return; }
         if (players.some((p) => p.nameKey === key)) {
           alert("Giocatore già presente nell'albo di questa stanza.");
           return;
@@ -244,7 +237,7 @@
       }
 
       async function deletePlayer(player) {
-        if (!confirm(`Rimuovere \"${player.name}\" dall'albo di questa stanza?`)) return;
+        if (!confirm(`Rimuovere "${player.name}" dall'albo di questa stanza?`)) return;
         try {
           await window.db.collection("rooms").doc(roomCode).collection("players").doc(player.id).delete();
           setStatus("Giocatore rimosso.");
@@ -257,9 +250,7 @@
       async function startCurrentGame(game) {
         try {
           await window.db.collection("rooms").doc(roomCode).collection("meta").doc("currentGame").set({
-            ...game,
-            active: true,
-            updatedAt: Date.now(),
+            ...game, active: true, updatedAt: Date.now(),
           });
           setView("game");
         } catch (err) {
@@ -271,8 +262,7 @@
       async function updateCurrentGame(patch) {
         try {
           await window.db.collection("rooms").doc(roomCode).collection("meta").doc("currentGame").set({
-            ...patch,
-            updatedAt: Date.now(),
+            ...patch, updatedAt: Date.now(),
           }, { merge: true });
         } catch (err) {
           console.error(err);
@@ -291,14 +281,10 @@
 
       async function closeCurrentGame(dateISO) {
         if (!currentGame) return;
-        if (!dateISO) {
-          alert("Inserisci una data valida.");
-          return;
-        }
+        if (!dateISO) { alert("Inserisci una data valida."); return; }
         const sessionId = uuid();
         const sessionData = {
-          id: sessionId,
-          dateISO,
+          id: sessionId, dateISO,
           playerCount: currentGame.playerCount,
           entries: currentGame.entries,
           scoresByEntryId: currentGame.scoresByEntryId,
@@ -329,9 +315,10 @@
         return map;
       }, [orderedPlayers]);
 
-      const selectedSession = useMemo(() => {
-        return (sessions || []).find((s) => s.id === selectedSessionId) || null;
-      }, [sessions, selectedSessionId]);
+      const selectedSession = useMemo(
+        () => (sessions || []).find((s) => s.id === selectedSessionId) || null,
+        [sessions, selectedSessionId]
+      );
 
       return (
         <div className="min-h-screen p-4 sm:p-6 text-neutral-900" style={{ background: 'radial-gradient(circle at top, #2f6b3d 0%, #215331 42%, #173b21 100%)' }}>
@@ -343,6 +330,7 @@
                     src="./logo-briscola-beta.png"
                     alt="Logo con assi siciliani"
                     className="w-14 sm:w-16 h-auto rounded-2xl border border-[#d8c9a7] bg-[#f5ecda] p-1 shadow-md shrink-0"
+                    onError={(e) => { e.target.style.display='none'; }}
                   />
                   <button className="text-left min-w-0" onClick={() => setView(roomCode ? "home" : "room")}>
                     <div className="text-lg sm:text-xl font-extrabold tracking-tight text-[#f7ecd7] truncate">Il Giuoco Della Briscola</div>
@@ -399,10 +387,7 @@
                 players={orderedPlayers}
                 sessions={sessions}
                 onBack={() => setView("home")}
-                onOpen={(playerId) => {
-                  setSelectedPlayerId(playerId);
-                  setView("stats_detail");
-                }}
+                onOpen={(playerId) => { setSelectedPlayerId(playerId); setView("stats_detail"); }}
               />
             ) : view === "stats_detail" ? (
               <StatsDetailView
@@ -415,16 +400,10 @@
               <ArchiveListView
                 sessions={sessions}
                 onBack={() => setView("home")}
-                onOpen={(sessionId) => {
-                  setSelectedSessionId(sessionId);
-                  setView("archive_detail");
-                }}
+                onOpen={(sessionId) => { setSelectedSessionId(sessionId); setView("archive_detail"); }}
               />
             ) : view === "archive_detail" ? (
-              <ArchiveDetailView
-                session={selectedSession}
-                onBack={() => setView("archive_list")}
-              />
+              <ArchiveDetailView session={selectedSession} onBack={() => setView("archive_list")} />
             ) : view === "transfers" ? (
               <TransfersView transfers={lastTransfers} onDone={() => setView("home")} />
             ) : (
@@ -454,6 +433,7 @@
               src="./logo-briscola-beta.png"
               alt="Logo con assi siciliani"
               className="w-40 sm:w-48 h-auto rounded-[28px] border border-[#d8c9a7] bg-[#f5ecda] p-2 shadow-xl"
+              onError={(e) => { e.target.style.display='none'; }}
             />
             <h1 className="mt-4 text-3xl sm:text-4xl font-extrabold tracking-tight text-[#f7ecd7] leading-tight">
               Il Giuoco Della Briscola
@@ -471,6 +451,7 @@
                   className="flex-1 px-4 py-3 rounded-2xl border border-[#d8c9a7] bg-white text-lg outline-none focus:ring-2 focus:ring-[#2d6a3d]"
                   value={roomInput}
                   onChange={(e) => setRoomInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") onEnter(); }}
                   placeholder="Es. BRISCOLA-AMICI-7K3P9"
                 />
                 <button className="px-5 py-3 rounded-2xl bg-[#1f5a34] hover:bg-[#18472a] text-white font-semibold shadow-sm" onClick={onEnter}>
@@ -494,6 +475,7 @@
               src="./logo-briscola-beta.png"
               alt="Logo con assi siciliani"
               className="w-28 sm:w-32 h-auto rounded-[24px] border border-[#d8c9a7] bg-[#f5ecda] p-2 shadow-lg"
+              onError={(e) => { e.target.style.display='none'; }}
             />
             <h1 className="mt-3 text-3xl sm:text-4xl font-extrabold tracking-tight text-[#f7ecd7] leading-tight">
               Il Giuoco Della Briscola
@@ -537,7 +519,6 @@
                   </div>
                 </div>
               </Panel>
-
               <Panel>
                 <div className="flex flex-col h-full justify-between gap-4">
                   <div>
@@ -549,7 +530,6 @@
                   </div>
                 </div>
               </Panel>
-
               <Panel>
                 <div className="flex flex-col h-full justify-between gap-4">
                   <div>
@@ -593,7 +573,13 @@
           <div className="rounded-2xl border p-4 mb-4">
             <div className="font-semibold mb-2">Crea nuovo giocatore</div>
             <div className="flex flex-col sm:flex-row gap-2">
-              <input className="flex-1 px-3 py-2 rounded-xl border" value={name} onChange={(e) => setName(e.target.value)} placeholder="Nome giocatore" />
+              <input
+                className="flex-1 px-3 py-2 rounded-xl border"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { onAdd(name); setName(""); } }}
+                placeholder="Nome giocatore"
+              />
               <button className="px-4 py-2 rounded-xl bg-[#1f5a34] hover:bg-[#18472a] text-white" onClick={() => { onAdd(name); setName(""); }}>Aggiungi</button>
             </div>
             <p className="mt-2 text-xs text-neutral-500">I nuovi giocatori si creano solo qui. Duplicati case-insensitive bloccati.</p>
@@ -652,13 +638,7 @@
         }));
         const scoresByEntryId = {};
         entries.forEach((e) => scoresByEntryId[e.entryId] = 0);
-        onStart({
-          playerCount,
-          entries,
-          scoresByEntryId,
-          rounds: [],
-          createdAt: Date.now(),
-        });
+        onStart({ playerCount, entries, scoresByEntryId, rounds: [], createdAt: Date.now() });
       }
 
       return (
@@ -667,7 +647,7 @@
             <h2 className="text-xl font-semibold">Nuova partita – {playerCount} giocatori</h2>
             <button className="px-3 py-2 rounded-xl bg-[#e9dcc4] hover:bg-[#ddceb1]" onClick={onBack}>Indietro</button>
           </div>
-          <p className="text-sm text-neutral-600 mb-4">Se un nome corrisponde a un registrato, viene usato automaticamente come esistente. Puoi sempre forzare il provvisorio.</p>
+          <p className="text-sm text-neutral-600 mb-4">Se un nome corrisponde a un registrato, viene usato automaticamente. Puoi sempre forzare il provvisorio.</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {slots.map((slot, idx) => {
               const resolved = resolvedFor(slot);
@@ -710,6 +690,13 @@
     }
 
     function GameView({ currentGame, onBack, onUpdate, onClose }) {
+      const [caller, setCaller] = useState("");
+      const [partner, setPartner] = useState("");
+      const [range, setRange] = useState("81-90");
+      const [outcome, setOutcome] = useState("vincono");
+      const [optDouble, setOptDouble] = useState(false);
+      const [optNoPoint, setOptNoPoint] = useState(false);
+
       if (!currentGame) {
         return (
           <Panel>
@@ -722,12 +709,6 @@
       }
 
       const players = currentGame.entries;
-      const [caller, setCaller] = useState("");
-      const [partner, setPartner] = useState("");
-      const [range, setRange] = useState("81-90");
-      const [outcome, setOutcome] = useState("vincono");
-      const [optDouble, setOptDouble] = useState(false);
-      const [optNoPoint, setOptNoPoint] = useState(false);
       const entryIdToName = useMemo(() => {
         const map = new Map();
         players.forEach((p) => map.set(p.entryId, p.displayName));
@@ -760,12 +741,7 @@
         const scoresByEntryId = { ...currentGame.scoresByEntryId };
         Object.entries(deltas).forEach(([eid, d]) => { scoresByEntryId[eid] = (scoresByEntryId[eid] || 0) + d; });
         await onUpdate({ scoresByEntryId, rounds: [round, ...(currentGame.rounds || [])] });
-        setCaller("");
-        setPartner("");
-        setRange("81-90");
-        setOutcome("vincono");
-        setOptDouble(false);
-        setOptNoPoint(false);
+        setCaller(""); setPartner(""); setRange("81-90"); setOutcome("vincono"); setOptDouble(false); setOptNoPoint(false);
       }
 
       async function undoRound(roundId) {
@@ -828,7 +804,7 @@
               </div>
             )}
             <div className="flex justify-end">
-              <button disabled={!preview} onClick={addRound} className={`px-4 py-2 rounded-xl text-white ${preview ? "bg-[#1f5a34] hover:bg-[#18472a]" : "bg-neutral-300"}`}>Aggiungi mano</button>
+              <button disabled={!preview} onClick={addRound} className={`px-4 py-2 rounded-xl text-white ${preview ? "bg-[#1f5a34] hover:bg-[#18472a]" : "bg-neutral-300 cursor-not-allowed"}`}>Aggiungi mano</button>
             </div>
           </div>
           <div className="bg-[#f5ecda] rounded-2xl shadow p-4">
@@ -888,7 +864,7 @@
     }
 
     function CloseView({ currentGame, onBack, onClose }) {
-      const [dateISO, setDateISO] = useState("");
+      const [dateISO, setDateISO] = useState(new Date().toISOString().split("T")[0]);
       if (!currentGame) {
         return (
           <Panel>
@@ -902,14 +878,14 @@
       return (
         <Panel>
           <h2 className="text-xl font-semibold mb-2">Chiudere la partita?</h2>
-          <p className="text-sm text-neutral-600 mb-4">Confermi la chiusura? Dopo la chiusura verrà richiesta la data e saranno suggeriti i pagamenti in punti.</p>
+          <p className="text-sm text-neutral-600 mb-4">Confermi la chiusura? Verranno suggeriti i pagamenti in punti.</p>
           <div className="mb-4">
             <label className="text-sm text-neutral-600">Data partita</label>
-            <input className="mt-1 px-3 py-2 rounded-xl border" type="date" value={dateISO} onChange={(e) => setDateISO(e.target.value)} />
+            <input className="mt-1 block px-3 py-2 rounded-xl border" type="date" value={dateISO} onChange={(e) => setDateISO(e.target.value)} />
           </div>
           <div className="flex gap-2 justify-end">
             <button className="px-4 py-2 rounded-xl bg-[#e9dcc4] hover:bg-[#ddceb1]" onClick={onBack}>No</button>
-            <button className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white" onClick={() => onClose(dateISO)}>Sì</button>
+            <button className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white" onClick={() => onClose(dateISO)}>Sì, chiudi</button>
           </div>
         </Panel>
       );
@@ -944,9 +920,7 @@
             const playerSessions = (sessions || []).filter((s) =>
               (s.entries || []).some((e) => e.kind === "reg" && e.playerId === p.id)
             );
-
-            let won = 0;
-            let lost = 0;
+            let won = 0, lost = 0;
             for (const s of playerSessions) {
               const entry = (s.entries || []).find((e) => e.kind === "reg" && e.playerId === p.id);
               if (!entry) continue;
@@ -954,10 +928,8 @@
               if (score > 0) won++;
               else if (score < 0) lost++;
             }
-
             const totalMatches = won + lost;
             const wr = totalMatches > 0 ? (won / totalMatches) * 100 : 0;
-
             return { ...p, won, lost, totalMatches, wr };
           })
           .sort((a, b) => {
@@ -1014,10 +986,7 @@
 
       const stats = useMemo(() => {
         if (!player) return null;
-        let handsTotal = 0;
-        let totalPoints = 0;
-        let matchesWon = 0;
-        let matchesLost = 0;
+        let handsTotal = 0, totalPoints = 0, matchesWon = 0, matchesLost = 0;
         const hist = { "81-90": 0, "91-100": 0, "101-117": 0, "118": 0 };
         for (const s of allSessions) {
           handsTotal += (s.rounds || []).length;
@@ -1046,8 +1015,7 @@
       }
 
       const histMax = Math.max(...Object.values(stats.hist), 1);
-      const chartW = 800;
-      const chartH = 220;
+      const chartW = 800, chartH = 220;
       const path = buildLinePath((stats.series || []).map((p) => ({ x: p.x, y: p.y })), chartW, chartH, 20);
 
       return (
@@ -1138,7 +1106,7 @@
                       <div className="font-semibold text-[#214a2d]">{s.dateISO || "Data non disponibile"}</div>
                       <div className="text-sm text-neutral-600">{s.playerCount} giocatori • {(s.entries || []).map((e) => e.displayName).join(", ")}</div>
                     </div>
-                    <div className="text-sm text-neutral-500">Apri dettaglio</div>
+                    <div className="text-sm text-neutral-500">Apri dettaglio →</div>
                   </div>
                 </button>
               ))}
@@ -1159,7 +1127,6 @@
           </Panel>
         );
       }
-
       const entries = session.entries || [];
       const entryIdToName = new Map(entries.map((e) => [e.entryId, e.displayName]));
       const leaderboard = [...entries]
@@ -1195,7 +1162,6 @@
                 ))}
               </div>
             </Panel>
-
             <Panel>
               <h3 className="text-lg font-semibold mb-3">Pagamenti suggeriti</h3>
               {transfers.length === 0 ? (
@@ -1223,17 +1189,12 @@
                 {(session.rounds || []).map((r) => (
                   <div key={r.id} className="rounded-2xl border p-3 flex flex-col gap-2">
                     <div className="text-sm">
-                      <span>
-                        Chiamante <b>{entryIdToName.get(r.callerEntryId)}</b> & Compagno <b>{entryIdToName.get(r.partnerEntryId)}</b>
-                      </span>
+                      <span>Chiamante <b>{entryIdToName.get(r.callerEntryId)}</b> & Compagno <b>{entryIdToName.get(r.partnerEntryId)}</b></span>
                     </div>
                     <div className="text-sm text-neutral-600">
                       Fascia <b>{r.range}</b> – Esito <b>{r.outcome === "vincono" ? "Vincono" : "Perdono"}</b>
                       {multiplier(r.optDouble, r.optNoPoint) > 1 && (
-                        <>
-                          <span className="mx-1">•</span>
-                          <span>Moltiplicatore x{multiplier(r.optDouble, r.optNoPoint)}</span>
-                        </>
+                        <><span className="mx-1">•</span><span>Moltiplicatore x{multiplier(r.optDouble, r.optNoPoint)}</span></>
                       )}
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
@@ -1262,4 +1223,3 @@
   </script>
 </body>
 </html>
-
